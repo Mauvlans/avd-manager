@@ -7,7 +7,7 @@ import type { HostPool, HostPoolType, LoadBalancerType, SessionHost } from "@avd
 export type FetchLike = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string }
-) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+) => Promise<{ ok: boolean; status: number; json: () => Promise<any>; headers?: { get(name: string): string | null } }>;
 
 export interface TokenProvider {
   /** Returns an app-only ARM bearer token for the given tenant, acquired via
@@ -61,9 +61,24 @@ export interface IArmHostPoolClient {
    * name, which by AVD convention is usually (but not guaranteed to be)
    * the same as the session host name's prefix before the FQDN suffix —
    * callers should resolve this from the session host's `resourceId`
-   * rather than assuming string equality; see resolveVmNameFromResourceId. */
-  startVm(subscriptionId: string, resourceGroup: string, vmName: string): Promise<void>;
+   * rather than assuming string equality; see resolveVmNameFromResourceId.
+   *
+   * Polls the ARM Azure-AsyncOperation (falling back to polling the VM's
+   * provisioningState directly if no operation URL is returned) until the
+   * operation reaches a terminal state or `timeoutMs` elapses, and returns
+   * the real outcome rather than assuming success on 202 Accepted. */
+  startVm(
+    subscriptionId: string,
+    resourceGroup: string,
+    vmName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<VmStartResult>;
 }
+
+export type VmStartResult =
+  | { outcome: "succeeded" }
+  | { outcome: "failed"; reason: string }
+  | { outcome: "timeout"; reason: string };
 
 const ARM_API_VERSION = "2023-09-05"; // Microsoft.DesktopVirtualization stable API version
 const COMPUTE_API_VERSION = "2024-07-01"; // Microsoft.Compute stable API version
@@ -238,22 +253,96 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
     return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}/start?api-version=${COMPUTE_API_VERSION}`;
   }
 
-  async startVm(subscriptionId: string, resourceGroup: string, vmName: string): Promise<void> {
+  private computeVmInstanceViewUrl(subscriptionId: string, resourceGroup: string, vmName: string): string {
+    return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}?api-version=${COMPUTE_API_VERSION}&$expand=instanceView`;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** Polls a given URL (either the Azure-AsyncOperation URL returned by the
+   * start call, or the VM resource itself as a provisioningState fallback)
+   * until it reports a terminal status or the deadline passes. */
+  private async pollUntilTerminal(
+    url: string,
+    isAsyncOperationUrl: boolean,
+    deadline: number,
+    pollIntervalMs: number
+  ): Promise<VmStartResult> {
     const headers = await this.authHeaders();
-    const res = await this.fetchImpl(this.computeVmStartUrl(subscriptionId, resourceGroup, vmName), {
-      method: "POST",
-      headers,
-    });
-    // Compute's async operations (start/stop/restart) return 200 (already
-    // running) or 202 (Accepted, operation in progress) — both are success
-    // for our purposes; we don't currently poll the Azure-AsyncOperation
-    // header to wait for completion (see PROGRESS.md: known limitation,
-    // start is fire-and-forget in v1).
+    while (Date.now() < deadline) {
+      const res = await this.fetchImpl(url, { method: "GET", headers });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        return { outcome: "failed", reason: `poll request failed: ${res.status} ${JSON.stringify(errBody)}` };
+      }
+      const data = await res.json();
+      const status: string | undefined = isAsyncOperationUrl
+        ? data.status
+        : data.properties?.provisioningState;
+
+      if (isAsyncOperationUrl) {
+        if (status === "Succeeded") return { outcome: "succeeded" };
+        if (status === "Failed" || status === "Canceled") {
+          return {
+            outcome: "failed",
+            reason: data.error ? JSON.stringify(data.error) : `operation status=${status}`,
+          };
+        }
+        // status is "Running"/"InProgress"/"NotStarted" — keep polling.
+      } else {
+        // provisioningState fallback: "Succeeded" for the VM resource means
+        // the last operation (our start call) completed; "Failed" is a
+        // terminal failure. Anything else ("Updating", etc.) keeps polling.
+        if (status === "Succeeded") return { outcome: "succeeded" };
+        if (status === "Failed") {
+          return { outcome: "failed", reason: `VM provisioningState=Failed` };
+        }
+      }
+
+      await this.sleep(pollIntervalMs);
+    }
+    return { outcome: "timeout", reason: `did not reach a terminal state within the polling deadline` };
+  }
+
+  async startVm(
+    subscriptionId: string,
+    resourceGroup: string,
+    vmName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<VmStartResult> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const pollIntervalMs = opts?.pollIntervalMs ?? 5_000;
+    const headers = await this.authHeaders();
+    const startUrl = this.computeVmStartUrl(subscriptionId, resourceGroup, vmName);
+    const res = await this.fetchImpl(startUrl, { method: "POST", headers });
+
+    // Compute's async start action returns 200 (already running, nothing to
+    // poll — treat as immediate success) or 202 (Accepted, operation in
+    // progress — must poll to confirm real outcome). Anything else is a
+    // request-level failure.
     if (!res.ok && res.status !== 202) {
       const errBody = await res.json().catch(() => ({}));
-      throw new Error(
-        `ARM request failed: POST ${this.computeVmStartUrl(subscriptionId, resourceGroup, vmName)} -> ${res.status} ${JSON.stringify(errBody)}`
-      );
+      throw new Error(`ARM request failed: POST ${startUrl} -> ${res.status} ${JSON.stringify(errBody)}`);
     }
+    if (res.status === 200) {
+      return { outcome: "succeeded" };
+    }
+
+    // 202 Accepted: poll for the real outcome instead of assuming success.
+    const asyncOpUrl = res.headers?.get?.("Azure-AsyncOperation") ?? res.headers?.get?.("azure-asyncoperation");
+    const deadline = Date.now() + timeoutMs;
+    if (asyncOpUrl) {
+      return this.pollUntilTerminal(asyncOpUrl, true, deadline, pollIntervalMs);
+    }
+    // No Azure-AsyncOperation header available (e.g. mocked fetch, or ARM
+    // omitted it) — fall back to polling the VM resource's provisioningState.
+    return this.pollUntilTerminal(
+      this.computeVmInstanceViewUrl(subscriptionId, resourceGroup, vmName),
+      false,
+      deadline,
+      pollIntervalMs
+    );
   }
 }

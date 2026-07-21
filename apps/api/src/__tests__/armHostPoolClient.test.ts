@@ -88,20 +88,85 @@ describe("ArmHostPoolClient (mocked ARM HTTP)", () => {
     expect(hosts[0].status).toBe("Available");
   });
 
-  it("startVm calls Microsoft.Compute start action (POST) with correct URL and auth", async () => {
-    const mockFetch: FetchLike = jest.fn(async () => ({
-      ok: true,
-      status: 202,
-      json: async () => ({}),
-    })) as unknown as FetchLike;
+  it("startVm calls Microsoft.Compute start action (POST) with correct URL and auth, then polls provisioningState fallback to success (no Azure-AsyncOperation header)", async () => {
+    let callCount = 0;
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      callCount += 1;
+      if (init?.method === "POST") {
+        return { ok: true, status: 202, json: async () => ({}), headers: { get: () => null } };
+      }
+      // Poll call: provisioningState fallback (no Azure-AsyncOperation header returned)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ properties: { provisioningState: "Succeeded" } }),
+      };
+    }) as unknown as FetchLike;
     const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
-    await client.startVm("sub", "rg", "host1");
+    const result = await client.startVm("sub", "rg", "host1", { pollIntervalMs: 1 });
 
+    expect(result).toEqual({ outcome: "succeeded" });
     const [url, init] = (mockFetch as jest.Mock).mock.calls[0];
     expect(url).toContain("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/host1/start");
     expect(url).toContain("api-version=");
     expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe("Bearer mock-token");
+    expect(callCount).toBeGreaterThan(1);
+  });
+
+  it("startVm returns immediate success on 200 (VM already running) without polling", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      headers: { get: () => null },
+    })) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.startVm("sub", "rg", "host1");
+    expect(result).toEqual({ outcome: "succeeded" });
+    expect((mockFetch as jest.Mock).mock.calls).toHaveLength(1);
+  });
+
+  it("startVm polls the Azure-AsyncOperation URL and reports failed outcome on operation failure", async () => {
+    const mockFetch: FetchLike = jest.fn(async (url: string, init?: any) => {
+      if (init?.method === "POST") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (name: string) => (name.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/op1" : null) },
+        };
+      }
+      expect(url).toBe("https://management.azure.com/opstatus/op1");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "Failed", error: { code: "OSProvisioningTimedOut" } }),
+      };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.startVm("sub", "rg", "host1", { pollIntervalMs: 1 });
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") {
+      expect(result.reason).toContain("OSProvisioningTimedOut");
+    }
+  });
+
+  it("startVm times out and reports a timeout outcome if the operation never reaches a terminal state", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "POST") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (name: string) => (name.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/op1" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "InProgress" }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.startVm("sub", "rg", "host1", { timeoutMs: 5, pollIntervalMs: 2 });
+    expect(result.outcome).toBe("timeout");
   });
 
   it("startVm throws a descriptive error on failure (non-2xx, non-202)", async () => {

@@ -92,6 +92,7 @@ export async function runAutoscaleTick(): Promise<void> {
 
     try {
       const armClient = new ArmHostPoolClient(row.hp_tenant_id, new FakeTokenProvider());
+      const failures: string[] = [];
       for (const action of decision.actions) {
         if (action.action === "deallocate_host") {
           await armClient.deleteSessionHost(row.subscription_id, row.resource_group, row.host_pool_name, action.hostName);
@@ -99,13 +100,19 @@ export async function runAutoscaleTick(): Promise<void> {
           const host = hosts.find((h) => h.name === action.hostName);
           if (!host) {
             console.error(`[autoscale] start_host action for unknown host ${action.hostName}, skipping`);
+            failures.push(`${action.hostName}: unknown host, skipped`);
             continue;
           }
           try {
             const vmName = resolveVmNameFromResourceId(host.resourceId);
-            await armClient.startVm(row.subscription_id, row.resource_group, vmName);
+            const result = await armClient.startVm(row.subscription_id, row.resource_group, vmName);
+            if (result.outcome !== "succeeded") {
+              console.error(`[autoscale] start_host for ${action.hostName} did not succeed: ${result.outcome} — ${result.reason}`);
+              failures.push(`${action.hostName}: ${result.outcome} — ${result.reason}`);
+            }
           } catch (err) {
             console.error(`[autoscale] failed to start VM for host ${action.hostName}:`, err);
+            failures.push(`${action.hostName}: request error — ${err instanceof Error ? err.message : String(err)}`);
           }
         }
       }
@@ -113,11 +120,11 @@ export async function runAutoscaleTick(): Promise<void> {
         await writeAuditLog(client, {
           tenantId: policy.tenantId,
           actor: "system:autoscale-engine",
-          action: "scaling_actions_executed",
+          action: failures.length > 0 ? "scaling_actions_partially_failed" : "scaling_actions_executed",
           resourceType: "scaling_policies",
           resourceId: policy.id,
           beforeState: null,
-          afterState: decision,
+          afterState: failures.length > 0 ? { ...decision, failures } : decision,
         });
       });
     } catch (err) {
