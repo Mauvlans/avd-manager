@@ -53,19 +53,24 @@ reproduced above in this session; not fabricated.
   up a fully migrated DB + API + web stack for local dev/demo.
 - **Not verified by actually running `docker compose build`/`up` in this
   sandbox — Docker is not installed here** (`docker: command not found`,
-  confirmed via `docker --version` and `which docker`, output captured this
+  confirmed via `docker --version`/`which docker`, re-confirmed again this
   session). The Dockerfiles and compose file are written carefully against
   the actual repo structure (npm workspaces, `dist/` build outputs, ports)
-  but are UNTESTED beyond static review. Next round with Docker available
-  should run `docker compose build` and `docker compose up` and fix whatever
-  breaks (most likely candidates: workspace `npm ci` layer caching paths,
-  Next.js standalone output mode not enabled so the web image is larger than
-  necessary, and the api Dockerfile assuming `db/migrate.js`'s relative
-  `path.join(__dirname, "..", "db", "migrations")` resolves correctly from
-  `/repo/apps/api/dist/db/migrate.js` post-build — this should be double
-  checked, since `dist/db/migrate.js` would resolve `../db/migrations`
-  relative to `dist/`, not repo root. **This is a known likely bug to fix
-  first** when Docker is available).
+  but are UNTESTED beyond static review and local `tsc`/`jest`/`next build`
+  checks (which don't exercise the Dockerfiles themselves, only the code
+  they package). One path concern raised in an earlier draft of this doc —
+  whether `db/migrate.js`'s `path.join(__dirname, "..", "db", "migrations")`
+  would break once bundled into `dist/` — turned out to be a non-issue on
+  review: `docker-entrypoint.sh` invokes `node /repo/db/migrate.js` directly
+  (the original source file at its real repo path, copied in via `COPY db
+  db`), not a compiled copy under `dist/`, so `__dirname` correctly resolves
+  to `/repo/db` and thus `/repo/db/migrations`. The remaining real unknowns
+  for next round: whether `npm ci` + workspace-scoped `npm run build
+  --workspace=...` behaves as expected inside the Alpine image (workspace
+  hoisting/symlink resolution can differ from bare-metal npm), and whether
+  the healthcheck-gated `depends_on` on `api` actually delays start_period
+  long enough for Postgres to be ready before the entrypoint's own polling
+  loop kicks in (should be redundant-safe either way, but unverified).
 
 ### 3. API gap-filling
 - **Tenant auth middleware** (`apps/api/src/middleware/tenantAuth.ts`, new):
@@ -169,12 +174,13 @@ branches.
 
 ## Exact next steps for a future continuation round
 
-1. **Fix the Docker path bug** flagged above (`dist/db/migrate.js` resolving
-   `../db/migrations` relative to `dist/` instead of repo root) — likely
-   needs `db/migrate.js` to resolve migrations relative to `process.cwd()`
-   or an explicit `MIGRATIONS_DIR` env var, or copy `db/` into the `dist/`
-   tree at build time. Then actually run `docker compose build && docker
-   compose up` on a machine with Docker and fix whatever else breaks.
+1. Get Docker in the loop and actually run `docker compose build && docker
+   compose up`. Likely trouble spots to check first: npm workspace
+   hoisting/symlinks inside the Alpine build layers, and Postgres
+   healthcheck timing vs. the entrypoint's own connection-retry loop (the
+   `path.join(__dirname, ...)` migrations-path concern from an earlier audit
+   was checked this round and is NOT a bug — `docker-entrypoint.sh` runs the
+   source `db/migrate.js` directly, not a `dist/` copy).
 2. Add `GET /api/onboarding/tenants/:tenantId/registry` and wire the
    onboarding wizard's step 4 to poll it.
 3. Add integration tests for `tenantAuth.ts` (supertest + mocked `withSystem`).
