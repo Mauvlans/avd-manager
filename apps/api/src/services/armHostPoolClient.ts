@@ -1,0 +1,209 @@
+import type { HostPool, HostPoolType, LoadBalancerType, SessionHost } from "@avd-manager/shared";
+
+/**
+ * Minimal fetch-like signature so we can inject a mock in unit tests without
+ * pulling in a full HTTP mocking library. Node 18+/20 has global fetch.
+ */
+export type FetchLike = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string }
+) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+
+export interface TokenProvider {
+  /** Returns an app-only ARM bearer token for the given tenant, acquired via
+   * the tenant's granted RBAC role (client credentials flow against our
+   * multi-tenant app registration, scoped to https://management.azure.com/.default). */
+  getArmToken(entraTenantId: string): Promise<string>;
+}
+
+/**
+ * Thin, real HTTP client over the Microsoft.DesktopVirtualization ARM REST
+ * API. Structured behind an interface (IArmHostPoolClient) + this concrete
+ * implementation (ArmHostPoolClient) so it is unit-testable with a mock
+ * FetchLike, since this sandbox has no live Azure credentials to test
+ * against a real subscription.
+ */
+export interface IArmHostPoolClient {
+  listHostPools(subscriptionId: string, resourceGroup: string): Promise<HostPool[]>;
+  getHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<HostPool | null>;
+  createOrUpdateHostPool(
+    subscriptionId: string,
+    resourceGroup: string,
+    name: string,
+    params: {
+      location: string;
+      hostPoolType: HostPoolType;
+      loadBalancerType: LoadBalancerType;
+      maxSessionLimit: number;
+    }
+  ): Promise<HostPool>;
+  deleteHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<void>;
+  listSessionHosts(subscriptionId: string, resourceGroup: string, hostPoolName: string): Promise<SessionHost[]>;
+  updateSessionHost(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string,
+    sessionHostName: string,
+    params: { allowNewSession: boolean }
+  ): Promise<void>;
+  deleteSessionHost(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string,
+    sessionHostName: string
+  ): Promise<void>;
+}
+
+const ARM_API_VERSION = "2023-09-05"; // Microsoft.DesktopVirtualization stable API version
+const ARM_BASE = "https://management.azure.com";
+
+export class ArmHostPoolClient implements IArmHostPoolClient {
+  constructor(
+    private readonly entraTenantId: string,
+    private readonly tokenProvider: TokenProvider,
+    private readonly fetchImpl: FetchLike = fetch as unknown as FetchLike
+  ) {}
+
+  private async authHeaders(): Promise<Record<string, string>> {
+    const token = await this.tokenProvider.getArmToken(this.entraTenantId);
+    return {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+  }
+
+  private hostPoolUrl(subscriptionId: string, resourceGroup: string, name?: string): string {
+    const base = `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DesktopVirtualization/hostPools`;
+    return name ? `${base}/${name}?api-version=${ARM_API_VERSION}` : `${base}?api-version=${ARM_API_VERSION}`;
+  }
+
+  private sessionHostUrl(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string,
+    sessionHostName?: string
+  ): string {
+    const base = `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DesktopVirtualization/hostPools/${hostPoolName}/sessionHosts`;
+    return sessionHostName
+      ? `${base}/${sessionHostName}?api-version=${ARM_API_VERSION}`
+      : `${base}?api-version=${ARM_API_VERSION}`;
+  }
+
+  private async request(url: string, method: string, body?: unknown) {
+    const headers = await this.authHeaders();
+    const res = await this.fetchImpl(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(`ARM request failed: ${method} ${url} -> ${res.status} ${JSON.stringify(errBody)}`);
+    }
+    return res.json();
+  }
+
+  private mapArmHostPool(subscriptionId: string, resourceGroup: string, armObj: any, tenantId = ""): HostPool {
+    return {
+      id: armObj.id,
+      tenantId,
+      subscriptionId,
+      resourceGroup,
+      name: armObj.name,
+      location: armObj.location,
+      hostPoolType: armObj.properties?.hostPoolType,
+      loadBalancerType: armObj.properties?.loadBalancerType,
+      maxSessionLimit: armObj.properties?.maxSessionLimit ?? 0,
+      sessionHostCount: 0,
+      createdAt: armObj.systemData?.createdAt ?? new Date().toISOString(),
+      updatedAt: armObj.systemData?.lastModifiedAt ?? new Date().toISOString(),
+    };
+  }
+
+  async listHostPools(subscriptionId: string, resourceGroup: string): Promise<HostPool[]> {
+    const data = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup), "GET");
+    return (data.value ?? []).map((v: any) => this.mapArmHostPool(subscriptionId, resourceGroup, v));
+  }
+
+  async getHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<HostPool | null> {
+    try {
+      const data = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup, name), "GET");
+      return this.mapArmHostPool(subscriptionId, resourceGroup, data);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("404")) return null;
+      throw err;
+    }
+  }
+
+  async createOrUpdateHostPool(
+    subscriptionId: string,
+    resourceGroup: string,
+    name: string,
+    params: {
+      location: string;
+      hostPoolType: HostPoolType;
+      loadBalancerType: LoadBalancerType;
+      maxSessionLimit: number;
+    }
+  ): Promise<HostPool> {
+    const body = {
+      location: params.location,
+      properties: {
+        hostPoolType: params.hostPoolType,
+        loadBalancerType: params.loadBalancerType,
+        maxSessionLimit: params.maxSessionLimit,
+        preferredAppGroupType: "Desktop",
+      },
+    };
+    const data = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup, name), "PUT", body);
+    return this.mapArmHostPool(subscriptionId, resourceGroup, data);
+  }
+
+  async deleteHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<void> {
+    await this.request(this.hostPoolUrl(subscriptionId, resourceGroup, name), "DELETE");
+  }
+
+  async listSessionHosts(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string
+  ): Promise<SessionHost[]> {
+    const data = await this.request(this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName), "GET");
+    return (data.value ?? []).map((v: any) => ({
+      name: v.name,
+      hostPoolId: hostPoolName,
+      resourceId: v.properties?.resourceId ?? "",
+      status: v.properties?.status ?? "Unknown",
+      sessions: v.properties?.sessions ?? 0,
+      allowNewSession: v.properties?.allowNewSession ?? true,
+      vmSize: v.properties?.virtualMachineSize ?? "",
+      lastHeartBeat: v.properties?.lastHeartBeat ?? null,
+    }));
+  }
+
+  async updateSessionHost(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string,
+    sessionHostName: string,
+    params: { allowNewSession: boolean }
+  ): Promise<void> {
+    await this.request(
+      this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName, sessionHostName),
+      "PATCH",
+      { properties: { allowNewSession: params.allowNewSession } }
+    );
+  }
+
+  async deleteSessionHost(
+    subscriptionId: string,
+    resourceGroup: string,
+    hostPoolName: string,
+    sessionHostName: string
+  ): Promise<void> {
+    await this.request(
+      this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName, sessionHostName),
+      "DELETE"
+    );
+  }
+}
