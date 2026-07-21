@@ -2,7 +2,7 @@ import { Router } from "express";
 import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import type { HostPoolType, LoadBalancerType } from "@avd-manager/shared";
-import { ArmHostPoolClient } from "../services/armHostPoolClient";
+import { ArmHostPoolClient, resolveVmNameFromResourceId } from "../services/armHostPoolClient";
 import { FakeTokenProvider } from "../services/tokenProvider";
 import { tenantAuth } from "../middleware/tenantAuth";
 
@@ -111,4 +111,93 @@ hostPoolsRouter.delete("/:id", async (req, res) => {
   });
   if (!deleted) return res.status(404).json({ error: "not found" });
   res.status(204).send();
+});
+
+/** Session-host-level routes (Priority 4 UI): list session hosts within a
+ * host pool, and start/deallocate the underlying VM for one. These call
+ * the same ArmHostPoolClient methods the autoscale timer uses, so the
+ * manual UI action and the automated scaling path go through identical
+ * ARM polling/outcome-surfacing logic — no separate "trust the POST"
+ * shortcut for the UI. */
+hostPoolsRouter.get("/:id/session-hosts", async (req, res) => {
+  const tenantId = (req as any).tenantId as string;
+  const pool = await withTenant(tenantId, async (client) => {
+    const { rows } = await client.query(`SELECT * FROM host_pools WHERE id = $1`, [req.params.id]);
+    return rows[0] ?? null;
+  });
+  if (!pool) return res.status(404).json({ error: "not found" });
+
+  const armClient = new ArmHostPoolClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+  const hosts = await armClient.listSessionHosts(pool.subscription_id, pool.resource_group, pool.name);
+  res.json(hosts);
+});
+
+async function loadHostPoolAndHost(tenantId: string, hostPoolId: string, sessionHostName: string) {
+  const pool = await withTenant(tenantId, async (client) => {
+    const { rows } = await client.query(`SELECT * FROM host_pools WHERE id = $1`, [hostPoolId]);
+    return rows[0] ?? null;
+  });
+  if (!pool) return { pool: null, host: null };
+  const armClient = new ArmHostPoolClient(pool.tenant_id, new FakeTokenProvider());
+  const hosts = await armClient.listSessionHosts(pool.subscription_id, pool.resource_group, pool.name);
+  const host = hosts.find((h) => h.name === sessionHostName) ?? null;
+  return { pool, host, armClient };
+}
+
+hostPoolsRouter.post("/:id/session-hosts/:sessionHostName/start", async (req, res) => {
+  const tenantId = (req as any).tenantId as string;
+  const { pool, host, armClient } = await loadHostPoolAndHost(tenantId, req.params.id, req.params.sessionHostName);
+  if (!pool) return res.status(404).json({ error: "host pool not found" });
+  if (!host) return res.status(404).json({ error: "session host not found" });
+
+  try {
+    const vmName = resolveVmNameFromResourceId(host.resourceId);
+    const result = await armClient!.startVm(pool.subscription_id, pool.resource_group, vmName);
+    await withTenant(tenantId, async (client) => {
+      await writeAuditLog(client, {
+        tenantId,
+        actor: req.header("x-actor") || "unknown",
+        action: result.outcome === "succeeded" ? "session_host_start_requested" : "session_host_start_failed",
+        resourceType: "session_hosts",
+        resourceId: req.params.sessionHostName,
+        beforeState: null,
+        afterState: result,
+      });
+    });
+    if (result.outcome !== "succeeded") {
+      return res.status(502).json({ error: `start did not succeed: ${result.outcome}`, detail: result });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
+hostPoolsRouter.post("/:id/session-hosts/:sessionHostName/deallocate", async (req, res) => {
+  const tenantId = (req as any).tenantId as string;
+  const { pool, host, armClient } = await loadHostPoolAndHost(tenantId, req.params.id, req.params.sessionHostName);
+  if (!pool) return res.status(404).json({ error: "host pool not found" });
+  if (!host) return res.status(404).json({ error: "session host not found" });
+
+  try {
+    const vmName = resolveVmNameFromResourceId(host.resourceId);
+    const result = await armClient!.deallocateVm(pool.subscription_id, pool.resource_group, vmName);
+    await withTenant(tenantId, async (client) => {
+      await writeAuditLog(client, {
+        tenantId,
+        actor: req.header("x-actor") || "unknown",
+        action: result.outcome === "succeeded" ? "session_host_deallocate_requested" : "session_host_deallocate_failed",
+        resourceType: "session_hosts",
+        resourceId: req.params.sessionHostName,
+        beforeState: null,
+        afterState: result,
+      });
+    });
+    if (result.outcome !== "succeeded") {
+      return res.status(502).json({ error: `deallocate did not succeed: ${result.outcome}`, detail: result });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
 });

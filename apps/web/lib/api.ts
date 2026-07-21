@@ -137,6 +137,42 @@ export function deleteHostPool(tenantId: string, id: string) {
   return request<void>(`/api/host-pools/${id}`, { tenantId, method: "DELETE" });
 }
 
+// --- Session hosts (apps/api/src/routes/hostPools.ts session-host routes) ---
+
+export interface SessionHostRow {
+  name: string;
+  hostPoolId: string;
+  resourceId: string;
+  status: "Available" | "Unavailable" | "Shutdown" | "Disconnected" | "Upgrading" | "Unknown";
+  sessions: number;
+  allowNewSession: boolean;
+  vmSize: string;
+  lastHeartBeat: string | null;
+}
+
+export type ArmLroResult =
+  | { outcome: "succeeded" }
+  | { outcome: "failed"; reason: string }
+  | { outcome: "timeout"; reason: string };
+
+export function listSessionHosts(tenantId: string, hostPoolId: string) {
+  return request<SessionHostRow[]>(`/api/host-pools/${hostPoolId}/session-hosts`, { tenantId });
+}
+
+export function startSessionHost(tenantId: string, hostPoolId: string, sessionHostName: string) {
+  return request<ArmLroResult>(`/api/host-pools/${hostPoolId}/session-hosts/${encodeURIComponent(sessionHostName)}/start`, {
+    tenantId,
+    method: "POST",
+  });
+}
+
+export function deallocateSessionHost(tenantId: string, hostPoolId: string, sessionHostName: string) {
+  return request<ArmLroResult>(
+    `/api/host-pools/${hostPoolId}/session-hosts/${encodeURIComponent(sessionHostName)}/deallocate`,
+    { tenantId, method: "POST" }
+  );
+}
+
 // --- Scaling policies (apps/api/src/routes/scalingPolicies.ts) ---
 
 export interface ScalingPolicyRow {

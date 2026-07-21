@@ -80,6 +80,19 @@ export interface IArmHostPoolClient {
     vmName: string,
     opts?: { timeoutMs?: number; pollIntervalMs?: number }
   ): Promise<VmStartResult>;
+
+  /** Deallocates (stops, releasing compute) the underlying VM for a session
+   * host via the Microsoft.Compute `deallocate` action — the counterpart to
+   * startVm, used by the session-host UI's "Deallocate" action and
+   * available for future autoscale scale-in paths that want to stop rather
+   * than delete a session host object. Same LRO polling pattern as
+   * startVm. */
+  deallocateVm(
+    subscriptionId: string,
+    resourceGroup: string,
+    vmName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<VmStartResult>;
 }
 
 export type VmStartResult =
@@ -401,6 +414,10 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
     return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}/start?api-version=${COMPUTE_API_VERSION}`;
   }
 
+  private computeVmDeallocateUrl(subscriptionId: string, resourceGroup: string, vmName: string): string {
+    return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=${COMPUTE_API_VERSION}`;
+  }
+
   private computeVmInstanceViewUrl(subscriptionId: string, resourceGroup: string, vmName: string): string {
     return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}?api-version=${COMPUTE_API_VERSION}&$expand=instanceView`;
   }
@@ -460,32 +477,46 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
     vmName: string,
     opts?: { timeoutMs?: number; pollIntervalMs?: number }
   ): Promise<VmStartResult> {
+    return this.computeAction(this.computeVmStartUrl(subscriptionId, resourceGroup, vmName), subscriptionId, resourceGroup, vmName, opts);
+  }
+
+  async deallocateVm(
+    subscriptionId: string,
+    resourceGroup: string,
+    vmName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<VmStartResult> {
+    return this.computeAction(this.computeVmDeallocateUrl(subscriptionId, resourceGroup, vmName), subscriptionId, resourceGroup, vmName, opts);
+  }
+
+  /** Shared implementation for Microsoft.Compute action calls (start,
+   * deallocate) that follow the same 200-immediate / 202-poll-to-terminal
+   * shape. */
+  private async computeAction(
+    actionUrl: string,
+    subscriptionId: string,
+    resourceGroup: string,
+    vmName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<VmStartResult> {
     const timeoutMs = opts?.timeoutMs ?? 120_000;
     const pollIntervalMs = opts?.pollIntervalMs ?? 5_000;
     const headers = await this.authHeaders();
-    const startUrl = this.computeVmStartUrl(subscriptionId, resourceGroup, vmName);
-    const res = await this.fetchImpl(startUrl, { method: "POST", headers });
+    const res = await this.fetchImpl(actionUrl, { method: "POST", headers });
 
-    // Compute's async start action returns 200 (already running, nothing to
-    // poll — treat as immediate success) or 202 (Accepted, operation in
-    // progress — must poll to confirm real outcome). Anything else is a
-    // request-level failure.
     if (!res.ok && res.status !== 202) {
       const errBody = await res.json().catch(() => ({}));
-      throw new Error(`ARM request failed: POST ${startUrl} -> ${res.status} ${JSON.stringify(errBody)}`);
+      throw new Error(`ARM request failed: POST ${actionUrl} -> ${res.status} ${JSON.stringify(errBody)}`);
     }
     if (res.status === 200) {
       return { outcome: "succeeded" };
     }
 
-    // 202 Accepted: poll for the real outcome instead of assuming success.
     const asyncOpUrl = res.headers?.get?.("Azure-AsyncOperation") ?? res.headers?.get?.("azure-asyncoperation");
     const deadline = Date.now() + timeoutMs;
     if (asyncOpUrl) {
       return this.pollUntilTerminal(asyncOpUrl, true, deadline, pollIntervalMs);
     }
-    // No Azure-AsyncOperation header available (e.g. mocked fetch, or ARM
-    // omitted it) — fall back to polling the VM resource's provisioningState.
     return this.pollUntilTerminal(
       this.computeVmInstanceViewUrl(subscriptionId, resourceGroup, vmName),
       false,
