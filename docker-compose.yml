@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password_change_me
+      POSTGRES_DB: avdmanager
+    ports:
+      - "5432:5432"
+    volumes:
+      - avdm_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres_dev_password_change_me@postgres:5432/avdmanager
+      PORT: "4000"
+      # Set a real value here to require x-api-key on tenant-scoped routes
+      # (see apps/api/src/middleware/tenantAuth.ts). Left unset for local
+      # docker-compose demo convenience.
+      API_AUTH_TOKEN: ""
+      ENTRA_APP_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+      GRAPH_CONSENT_REDIRECT_URI: "http://localhost:4000/api/onboarding/graph-consent/callback"
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:4000"
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "http://localhost:4000"
+    ports:
+      - "3000:3000"
+
+volumes:
+  avdm_pg_data:
