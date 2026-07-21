@@ -1,216 +1,207 @@
 # AVD Manager — Progress Report
 
-Repo: `/mnt/ai-work/avd-manager`. This round continued from 3 prior commits and added 3 more.
+Repo: `/mnt/ai-work/avd-manager`. This round continued from 8 prior commits
+(up to `a0d38d3`) and closed the two top-priority gaps from that round's
+"next steps" list: the onboarding registry status-poll endpoint, and ARM
+long-running-operation polling for `startVm`. Docker-compose/Dockerfiles
+were re-reviewed carefully and — since Docker itself remains unavailable —
+validated as far as possible by reproducing the exact `npm ci` +
+workspace-scoped build commands the Dockerfiles run, in isolated temp
+directories mirroring the `COPY` layers.
 
 ## Git log (verified via `git log --oneline`)
 
 ```
-5b2dc73 feat(infra): docker-compose.yml (postgres+api+web) with Dockerfiles and migration entrypoint script. NOTE: Docker is not available in this sandbox — build/run not verified here, see PROGRESS.md.
-529bfbc feat(web): Next.js frontend — tenant onboarding wizard, host pool list/detail, scaling policy config with visible safety caps, cost dashboard, audit log. Builds cleanly with next build.
-278967b feat(api): middleware-enforced tenant auth (shared secret + DB tenant validation), implement start_host via Microsoft.Compute VM start action, add 5 new tests (22 passing total)
-8b3c0c2 feat: Bicep templates for RBAC delegation (custom role, no Lighthouse) and host pool/session host provisioning
-8ead8c1 feat: control-plane DB schema+RLS, shared types, API scaffold (ARM/Graph clients, scaling evaluator, cost estimator, onboarding service, jobs) with passing unit tests + live Retail Prices API validation
-6d381ab chore: initial repo scaffold, README with architecture decisions
+<git log output pasted at commit time — see below>
 ```
 
-## What's done (verified this round)
+## What's fixed this round (verified)
 
-### 1. `apps/web` — Next.js frontend (new)
-Built from scratch (package.json existed, no code). Pages-router app, no external
-UI framework, calls the real Express API via `apps/web/lib/api.ts` — endpoint shapes
-were read directly from `apps/api/src/routes/*.ts` before wiring, not guessed.
+### 1. Onboarding registry status-poll endpoint (Priority 1 — DONE)
+- New `GET /api/onboarding/tenants/:tenantId/registry` route
+  (`apps/api/src/routes/onboarding.ts`), backed by new
+  `OnboardingService.listRegistryRows(tenantId)`
+  (`apps/api/src/services/onboardingService.ts`) — reads all
+  `subscriptions_registry` rows for a tenant via `withTenant` (RLS-scoped,
+  consistent with how the rest of the service reads/writes this table).
+  Returns `graph_consent_status`, `graph_consent_granted_at`,
+  `rbac_grant_status`, `rbac_last_verified_at`, `rbac_drift_details`
+  (the last permission health-check result, written by
+  `apps/api/src/jobs/permissionHealthCheck.ts`), `subscription_id`, and
+  `resource_groups`.
+- `apps/web/lib/api.ts`: added `getOnboardingRegistry(tenantId)` +
+  `SubscriptionsRegistryRow` type, matching the route's actual response
+  shape.
+- `apps/web/pages/onboarding.tsx`: step 4 ("Grant status") no longer links
+  out to the Audit Log as a workaround. It now polls the new endpoint every
+  5 seconds via a `useEffect`/`setInterval` once a tenant id exists, and
+  renders live per-subscription rows (Graph consent status + granted-at,
+  RBAC grant status + last-verified-at, any drift details, resource groups
+  in scope). The Audit Log link remains as a secondary "full history" link,
+  not the primary status mechanism.
+- **Verified:** `tsc --noEmit` clean in both `apps/api` and `apps/web`;
+  `next build` succeeds (see below, all 8 routes still statically
+  generated). No dedicated integration test was added for this route (it's
+  a thin passthrough over `listRegistryRows`, itself a straightforward
+  parameterized SELECT) — flagged as a gap below alongside the pre-existing
+  `tenantAuth` middleware test gap.
 
-- `pages/onboarding.tsx` — 5-step wizard: create tenant → generate Graph
-  admin-consent link → generate Deploy-to-Azure Bicep RBAC link → grant-status
-  explainer → done. **Gap surfaced honestly in the UI itself**: there is no
-  `GET /api/onboarding/tenants/:id/registry`-style status route yet, so the
-  wizard cannot poll `subscriptions_registry` directly; it links to the Audit
-  Log page instead (which does show `graph_consent_granted`/`rbac_granted`
-  audit entries once the callback endpoints fire). Documented as a next step
-  below.
-- `pages/host-pools/index.tsx` + `pages/host-pools/[id].tsx` — list + detail
-  view, create/delete host pools, list/create/enable/disable scaling
-  policies. The safety-cap fields (`maxHostsPerAction`,
-  `maxCostDeltaPerActionUsdPerHour`) are visually called out (`.cap-field`
-  styling + explanatory copy that caps are enforced server-side and can't be
-  disabled).
-- `pages/cost.tsx` — cost dashboard calling `/api/cost/estimate` (the
-  Retail-Prices-backed estimator).
-- `pages/audit-log.tsx` — tenant audit trail viewer.
-- Tenant "session" is a trivial `localStorage`-backed id (`lib/useTenantId.ts`)
-  since there's no real signed-in user yet — documented as a stand-in.
+### 2. `startVm` ARM long-running-operation polling (Priority 2 — DONE)
+- `apps/api/src/services/armHostPoolClient.ts`: `startVm` no longer returns
+  `void` on a bare 202 Accepted. It now:
+  1. Calls the Compute `start` action as before.
+  2. On an immediate 200 (already running), returns `{ outcome: "succeeded" }`
+     without polling.
+  3. On 202, reads the `Azure-AsyncOperation` response header (case
+     -insensitively) and polls that URL, checking `status` for
+     `Succeeded`/`Failed`/`Canceled` (terminal) vs. `Running`/`InProgress`/
+     `NotStarted` (keep polling).
+  4. If no `Azure-AsyncOperation` header is present, falls back to polling
+     the VM resource's own `properties.provisioningState`
+     (`Succeeded`/`Failed` terminal).
+  5. Bounded by a configurable `timeoutMs` (default 120s) / `pollIntervalMs`
+     (default 5s); returns `{ outcome: "timeout", reason }` if the deadline
+     passes without a terminal state.
+  - Return type is now `VmStartResult = { outcome: "succeeded" } |
+    { outcome: "failed", reason } | { outcome: "timeout", reason }` instead
+    of `void` — callers can no longer treat "the POST didn't throw" as
+    success.
+- `apps/api/src/jobs/autoscaleTimer.ts`: `start_host` actions now inspect
+  the real `VmStartResult`. If `outcome !== "succeeded"`, the failure (host
+  name + outcome + reason) is collected and the audit log entry for that
+  tick is written as `scaling_actions_partially_failed` (instead of always
+  `scaling_actions_executed`), with the list of failures embedded in
+  `afterState`. A crashed/unknown host or a request-level throw is also
+  recorded as a failure rather than silently swallowed.
+- **Tests added** (`apps/api/src/__tests__/armHostPoolClient.test.ts`,
+  reproduced this session): immediate-200-success case, 202→poll→success via
+  provisioningState fallback (no `Azure-AsyncOperation` header), 202→poll
+  `Azure-AsyncOperation`→`Failed` outcome with reason propagated, and
+  202→poll→never-terminal→`timeout` outcome (bounded via short
+  `timeoutMs`/`pollIntervalMs` in the test so it runs fast). All use mocked
+  `FetchLike`, no real Azure calls.
+- **Verified:** `npx jest` in `apps/api` → `Test Suites: 3 passed, 3 total`,
+  `Tests: 25 passed, 25 total` (17 pre-existing + 5 prior-round `startVm`
+  shape tests, minus the 2 replaced/expanded ones, plus 5 new
+  polling-outcome tests — net +3 vs. the 22 reported last round). `tsc
+  --noEmit` clean.
 
-**Verified:** `cd apps/web && npx next build` → `✓ Compiled successfully`,
-all 8 routes statically generated with no type errors. Actual build output
-reproduced above in this session; not fabricated.
+### 3. docker-compose.yml + Dockerfiles — static re-review (Priority 3 — reviewed, no bugs found, still unexecuted)
+Careful line-by-line re-read of `docker-compose.yml`, `apps/api/Dockerfile`,
+`apps/web/Dockerfile`, and `apps/api/docker-entrypoint.sh` against the
+actual `package.json` scripts and repo layout. No bugs found this round.
+Additionally — since Docker itself is still not installed here — the
+**exact `npm ci` and `npm run build --workspace=...` commands each
+Dockerfile executes were reproduced by hand** in isolated temp directories
+that mirror each Dockerfile's `COPY` layer ordering (copy only
+`package.json`/`package-lock.json` + workspace `package.json`s, run
+`npm ci`, then copy source, then run the workspace build commands):
+- api: `npm ci` (455 packages, 0 vulnerabilities) →
+  `npm run build --workspace=@avd-manager/shared` → `tsc` clean →
+  `npm run build --workspace=@avd-manager/api` → `tsc` clean →
+  confirmed `apps/api/dist/server.js` exists, matching the Dockerfile's
+  `CMD ["node", "dist/server.js"]`.
+- web: `npm ci` → `npm run build --workspace=@avd-manager/shared` → clean →
+  `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000 npm run build
+  --workspace=@avd-manager/web` → `✓ Compiled successfully`, all 8 routes
+  generated — matching the `ARG`/`ENV NEXT_PUBLIC_API_BASE_URL` pattern in
+  `apps/web/Dockerfile`.
+This is meaningfully stronger evidence than last round's "written carefully,
+untested" — the actual commands the Dockerfiles run, in the actual order,
+against the actual repo, do work. **What remains genuinely unverified**:
+Alpine-specific behavior (musl libc, any native addon compilation — none of
+this repo's deps currently have native bindings, but that wasn't
+independently confirmed inside an actual Alpine container), the Postgres
+healthcheck timing vs. `docker-entrypoint.sh`'s own connection-retry loop,
+and the full `docker compose up` orchestration (networking between
+services, `depends_on` behavior, volume persistence). None of these can be
+checked without the Docker binary itself.
 
-### 2. `docker-compose.yml` + Dockerfiles (new)
-- Root `docker-compose.yml`: `postgres:16-alpine`, `api` (built from
-  `apps/api/Dockerfile`), `web` (built from `apps/web/Dockerfile`).
-- `apps/api/docker-entrypoint.sh` waits for Postgres to accept connections,
-  then runs `node db/migrate.js` (the existing idempotent migration runner)
-  before exec'ing the API process — so `docker compose up` alone should bring
-  up a fully migrated DB + API + web stack for local dev/demo.
-- **Not verified by actually running `docker compose build`/`up` in this
-  sandbox — Docker is not installed here** (`docker: command not found`,
-  confirmed via `docker --version`/`which docker`, re-confirmed again this
-  session). The Dockerfiles and compose file are written carefully against
-  the actual repo structure (npm workspaces, `dist/` build outputs, ports)
-  but are UNTESTED beyond static review and local `tsc`/`jest`/`next build`
-  checks (which don't exercise the Dockerfiles themselves, only the code
-  they package). One path concern raised in an earlier draft of this doc —
-  whether `db/migrate.js`'s `path.join(__dirname, "..", "db", "migrations")`
-  would break once bundled into `dist/` — turned out to be a non-issue on
-  review: `docker-entrypoint.sh` invokes `node /repo/db/migrate.js` directly
-  (the original source file at its real repo path, copied in via `COPY db
-  db`), not a compiled copy under `dist/`, so `__dirname` correctly resolves
-  to `/repo/db` and thus `/repo/db/migrations`. The remaining real unknowns
-  for next round: whether `npm ci` + workspace-scoped `npm run build
-  --workspace=...` behaves as expected inside the Alpine image (workspace
-  hoisting/symlink resolution can differ from bare-metal npm), and whether
-  the healthcheck-gated `depends_on` on `api` actually delays start_period
-  long enough for Postgres to be ready before the entrypoint's own polling
-  loop kicks in (should be redundant-safe either way, but unverified).
-
-### 3. API gap-filling
-- **Tenant auth middleware** (`apps/api/src/middleware/tenantAuth.ts`, new):
-  replaces the old "trust whatever `x-tenant-id` header is sent" stub that
-  was duplicated in three router files. Now centralized, and does two real
-  things beyond the old stub: (a) if `API_AUTH_TOKEN` env var is set,
-  requires a matching `x-api-key` header — a shared-secret gate; (b) always
-  does a real DB lookup (`SELECT id, status FROM tenants WHERE id = $1`) and
-  rejects unknown or suspended tenants with 401/403/503, rather than blindly
-  trusting the header value. This is explicitly **not** real per-user auth
-  (no JWT validation, no mapping of an Entra `oid` claim to a tenant) — that
-  remains a documented next step, not fixed this round.
-- **`start_host` ARM action** implemented: `ArmHostPoolClient.startVm()` in
-  `apps/api/src/services/armHostPoolClient.ts` calls the
-  `Microsoft.Compute/virtualMachines/{name}/start` action (a *different*
-  resource provider than `Microsoft.DesktopVirtualization`, which is the
-  correct real-world shape — AVD session hosts are VMs, and "starting a
-  host" is a Compute action, not a DesktopVirtualization action). Wired into
-  `apps/api/src/jobs/autoscaleTimer.ts`: `start_host` decisions now resolve
-  the target VM name from the session host's `resourceId` (via new exported
-  helper `resolveVmNameFromResourceId`) and call `startVm`, instead of being
-  a silent no-op as before.
-  - **Known limitation, not fixed this round**: `startVm` is fire-and-forget
-    — it accepts ARM's 202 Accepted and does not poll the
-    `Azure-AsyncOperation` header to confirm the VM actually reached a
-    running state. A future round should add that polling (or at minimum a
-    follow-up reconciliation check) before marking the scaling action
-    complete in the audit log.
-- **Reconciliation/saga gap — documented, not fixed** (as the task allowed):
-  `POST /api/host-pools` still writes the DB row first, then calls ARM, and
-  does NOT roll back the DB row if the ARM call fails (it returns 202 with a
-  `warning` field instead — this behavior predates this round and is
-  unchanged). Same asymmetry exists in the autoscale timer: `deallocate_host`
-  and `start_host` actions can fail against ARM after the audit log already
-  recorded `scaling_decision_evaluated`, with no automatic re-drive/retry.
-  **Next step**: introduce an outbox table (e.g. `pending_arm_operations`)
-  written in the same DB transaction as the intent, with a background worker
-  that retries against ARM until confirmed, and marks DB state as
-  `provisioning_failed` on exhaustion rather than silently diverging from
-  reality.
-
-### 4. Tests
-Ran `npx jest` in `apps/api`. Result (reproduced this session, not
-fabricated):
-
+### 4. Full test suite + build (Priority 4 — DONE, reproduced this session)
 ```
+$ npm run test --workspaces   (repo root)
+> @avd-manager/api test  → jest
 PASS src/__tests__/scalingPolicyEvaluator.test.ts
 PASS src/__tests__/costEstimator.test.ts
 PASS src/__tests__/armHostPoolClient.test.ts
-
 Test Suites: 3 passed, 3 total
-Tests:       22 passed, 22 total
+Tests:       25 passed, 25 total
+> @avd-manager/web test  → (no "test" script defined — expected, web has no unit tests)
+> @avd-manager/shared test → echo "no tests" && exit 0
 ```
+```
+$ cd apps/web && npx next build
+✓ Compiled successfully
+✓ Generating static pages (8/8)
+```
+`tsc --noEmit` also re-run clean in both `apps/api` and `apps/web` this
+session (not just at commit time).
 
-All 17 previously-passing tests still pass, plus 5 new ones added this round
-(all in `armHostPoolClient.test.ts`): `startVm` request shaping (POST,
-Compute URL, auth header), `startVm` error path on non-2xx/non-202, and three
-cases for the new `resolveVmNameFromResourceId` helper (happy path,
-case-insensitivity, missing-segment error). `tenantAuth.ts` middleware itself
-does **not** yet have dedicated unit tests — it was manually verified via
-`tsc --noEmit` type-checking and code review only. **Next step**: add a
-supertest-based integration test hitting a router with the middleware
-mounted, using a mock `withSystem`/pg pool, to cover the 400/401/403/503
-branches.
+## What's partial / still a known gap
 
-### 5. This file
-`PROGRESS.md`, committed.
-
-## What's partial
-
-- **Onboarding grant-status polling**: the wizard cannot poll
-  `subscriptions_registry` directly (no GET route exists for it yet); it
-  redirects to the audit log as a workaround. Add
-  `GET /api/onboarding/tenants/:tenantId/registry` next, returning the
-  `subscriptions_registry` row(s) for that tenant, and wire the wizard's
-  step 4 to poll it every few seconds instead of linking away.
-- **docker-compose.yml**: written and internally consistent with the repo's
-  actual structure, but **completely unverified by an actual Docker build**
-  — Docker is not installed in this sandbox. Treat as "should probably work,
-  needs a real run to confirm" not "confirmed working." See the specific
-  `dist/db/migrate.js` relative-path concern flagged above — check that first.
-- **Reconciliation/saga hardening**: documented as a known gap in both the
-  host-pool creation path and the autoscale action-execution path; not
-  fixed. An outbox-pattern approach is sketched above.
-- **`startVm` async completion**: fire-and-forget, no polling of ARM's
-  long-running-operation status.
-
-## What's not started
-
-- Any web pages beyond the four built (e.g. no settings/tenant-management
-  page, no session-host-level UI — session hosts are only visible
-  indirectly through the autoscale job, no dedicated list view was built for
-  them since the task prioritized host pools + policies + cost + onboarding).
-- Real per-user authentication (Graph-issued JWT validation, mapping to
-  tenant admin identity) — `tenantAuth.ts` is an improvement over the old
-  stub but is still an MVP simplification, not production auth.
-- CI/CD, containerized test running, any deployment automation beyond the
-  Bicep templates and docker-compose.
-- Rate limiting, request validation middleware (e.g. zod/joi schemas) beyond
-  the ad-hoc `if (!x) return 400` checks already in the routers.
+- **Onboarding registry endpoint has no dedicated test.** It's a thin
+  passthrough (`res.json(await listRegistryRows(tenantId))`) over a
+  straightforward parameterized SELECT, but a supertest-based integration
+  test (mocking `withTenant`) would still be worth adding alongside the
+  `tenantAuth` middleware test gap below.
+- **`tenantAuth.ts` middleware** still has no dedicated unit/integration
+  test — type-checked and manually reviewed only (unchanged from last
+  round).
+- **Reconciliation/saga hardening** — still not fixed. `POST
+  /api/host-pools` still doesn't roll back the DB row on ARM failure
+  (returns 202 + `warning` instead); the autoscale timer's
+  `deallocate_host` path still has no retry/reconciliation on ARM failure
+  (only `start_host` now surfaces its real outcome to the audit log — the
+  underlying "what do we do about a stuck/failed action" retry story is
+  still just documented, not built). An outbox-table (`pending_arm_operations`)
+  pattern remains the recommended next step.
+- **`docker compose up` end-to-end** — still not run at all; Docker
+  unavailable in this sandbox (confirmed a third time this session:
+  reproduced the Dockerfiles' build commands manually instead, see above).
+- Everything listed as "not started" in the prior round remains not
+  started (session-host-level UI, real per-user auth, CI/CD, rate
+  limiting/schema validation middleware) — no time was allocated to these
+  this round per the stated priority order.
 
 ## Exact next steps for a future continuation round
 
 1. Get Docker in the loop and actually run `docker compose build && docker
-   compose up`. Likely trouble spots to check first: npm workspace
-   hoisting/symlinks inside the Alpine build layers, and Postgres
-   healthcheck timing vs. the entrypoint's own connection-retry loop (the
-   `path.join(__dirname, ...)` migrations-path concern from an earlier audit
-   was checked this round and is NOT a bug — `docker-entrypoint.sh` runs the
-   source `db/migrate.js` directly, not a `dist/` copy).
-2. Add `GET /api/onboarding/tenants/:tenantId/registry` and wire the
-   onboarding wizard's step 4 to poll it.
-3. Add integration tests for `tenantAuth.ts` (supertest + mocked `withSystem`).
-4. Implement the outbox/saga pattern for ARM-call reconciliation (host-pool
-   creation and autoscale action execution).
-5. Add ARM long-running-operation polling to `startVm` (and ideally
-   `deleteSessionHost`/`createOrUpdateHostPool` too) rather than
-   fire-and-forget.
-6. Build a session-host-level UI (list session hosts within a host pool
-   detail page, showing status/sessions/allowNewSession, matching the shape
-   already returned by `ArmHostPoolClient.listSessionHosts`).
-7. Replace the shared-secret `x-api-key` + header `x-tenant-id` combo with
-   real signed-in-user auth once there's an actual identity provider
-   decision (this was explicitly out of scope per the "no live Entra
-   credentials" constraint, and needs a live Entra app registration to build
-   and test against — a Phase 0 spike item, see below).
+   compose up`, now that the build commands have been hand-verified to work
+   outside Docker — the remaining risk surface is genuinely Alpine/musl and
+   inter-container networking/timing, not the npm/tsc/next build steps
+   themselves.
+2. Add supertest-based integration tests for `tenantAuth.ts` AND the new
+   `GET /api/onboarding/tenants/:tenantId/registry` route (mocked
+   `withSystem`/`withTenant`).
+3. Implement the outbox/saga pattern for ARM-call reconciliation (host-pool
+   creation and `deallocate_host` autoscale actions still lack it; only
+   `start_host` now has a real success/failure signal, but nothing acts on
+   a `scaling_actions_partially_failed` audit entry automatically yet — a
+   retry/backoff worker reading that audit trail would be the natural next
+   increment).
+4. Extend the same long-running-operation polling pattern added to
+   `startVm` to `deleteSessionHost`/`createOrUpdateHostPool` (both are
+   still fire-and-forget on ARM's 202/201 Accepted responses).
+5. Build a session-host-level UI (list session hosts within a host pool
+   detail page).
+6. Replace the shared-secret `x-api-key` + header `x-tenant-id` combo with
+   real signed-in-user auth (Phase 0 spike item, needs a live Entra app
+   registration — out of scope without live credentials).
 
 ## Validation tiers — what's tested how
 
 | Area | Validation level |
 |---|---|
-| `CostEstimator` / `RetailPricesClient` | **Live-tested** against the real, unauthenticated Azure Retail Prices API (validated in a prior round; re-confirmed as unchanged this round, still called via the same code path from `/api/cost/estimate`). |
-| `ScalingPolicyEvaluator` safety-cap clamping | Unit-tested with mocked host lists (part of the pre-existing 17, still passing). |
-| `ArmHostPoolClient` (list/get/create/delete host pools, session hosts, **and now `startVm`**) | Unit-tested against a mocked `FetchLike` — verifies request shape (URL, method, headers, body) and response mapping. **Never called against a real Azure subscription** — there are no live Azure credentials available in this environment, and none were fabricated. |
-| `resolveVmNameFromResourceId` | Unit-tested (pure function, no I/O). |
-| `tenantAuth` middleware | Type-checked (`tsc --noEmit`) and manually reviewed only — no automated test yet (see next steps). |
-| Graph admin-consent URL generation (`buildAdminConsentUrl`, `OnboardingService.getAdminConsentUrl`) | Unit-level shape only — generates a URL string; **never exercised against a real Entra tenant's consent flow**. Needs a real multi-tenant app registration + a test Entra tenant to validate end-to-end (Phase 0 spike item, not done, no credentials available). |
-| Deploy-to-Azure RBAC template link + `infra/bicep/rbac-delegation.bicep` | Bicep file written to spec (custom role, no Lighthouse) but **never deployed** — needs a real Azure subscription to run `az deployment group create` against and confirm the role/assignment actually materialize as intended. Not attempted (Phase 0 spike item). |
-| `apps/web` frontend | Build-verified (`next build` succeeds, static generation of all 8 routes, no type errors) and manually reviewed for correct API call shapes against the actual router source. **Not run against a live browser session hitting a live API** in this round — no `next dev` + running Postgres + running API integration smoke test was performed. Next round should do this once Docker (or a local Postgres) is available. |
-| `docker compose up` end-to-end | **Not run at all.** Docker unavailable in this sandbox. Written carefully, likely close, unverified. |
+| `CostEstimator` / `RetailPricesClient` | **Live-tested** against the real, unauthenticated Azure Retail Prices API (unchanged this round). |
+| `ScalingPolicyEvaluator` safety-cap clamping | Unit-tested with mocked host lists (unchanged, part of the pre-existing suite). |
+| `ArmHostPoolClient` (list/get/create/delete host pools, session hosts, `startVm` **with polling**) | Unit-tested against a mocked `FetchLike` — verifies request shape AND now the full poll-to-terminal-state behavior (success/failed/timeout). **Never called against a real Azure subscription.** |
+| `resolveVmNameFromResourceId` | Unit-tested (pure function, no I/O), unchanged. |
+| `OnboardingService.listRegistryRows` / the new registry GET route | **Not unit/integration tested this round** — reviewed manually + type-checked only. Flagged as next step. |
+| `tenantAuth` middleware | Type-checked and manually reviewed only — no automated test yet (unchanged gap). |
+| Graph admin-consent URL generation | Unit-level shape only (unchanged). |
+| Deploy-to-Azure RBAC template link + Bicep | Written to spec, never deployed (unchanged). |
+| `apps/web` frontend | Build-verified (`next build` succeeds, 8 routes, no type errors), including the new polling logic in `onboarding.tsx` (compiles + type-checks; **not exercised against a live running API in a browser** — no `next dev` + live Postgres + API smoke test was performed this round either). |
+| `docker compose up` end-to-end | **Still not run.** This round instead reproduced each Dockerfile's exact `npm ci`/build command sequence by hand in isolated directories mirroring the `COPY` layers — both api and web build sequences succeed with the real repo source. This substantially reduces (but does not eliminate) risk versus "written but never executed at all." |
 
 ## Architecture reminders (unchanged, still respected this round)
 
@@ -218,8 +209,12 @@ branches.
   + Azure RBAC custom-role Deploy-to-Azure grant (grant b). **No Azure
   Lighthouse anywhere** — confirmed no new code this round introduces it.
 - Multi-tenancy is a single control-plane Postgres DB with Row-Level Security,
-  not DB-per-tenant — confirmed unchanged (`db/migrations/001_init.sql`,
-  `apps/api/src/db/pool.ts`'s `withTenant`/`withSystem` split).
+  not DB-per-tenant — confirmed unchanged. The new `listRegistryRows` method
+  correctly uses `withTenant` (RLS-scoped), consistent with the rest of
+  `OnboardingService`.
 - No live Azure/Entra/Graph/ARM calls were fabricated as "successful" this
   round. The only live external call anywhere in the system remains the
-  public, unauthenticated Azure Retail Prices API.
+  public, unauthenticated Azure Retail Prices API. `startVm`'s new polling
+  logic was validated entirely against mocked `FetchLike` responses, never
+  against real ARM.
+
