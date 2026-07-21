@@ -1,14 +1,10 @@
 import { Router } from "express";
 import { withTenant } from "../db/pool";
+import { tenantAuth } from "../middleware/tenantAuth";
 
 export const auditLogRouter = Router();
 
-auditLogRouter.use((req, res, next) => {
-  const tenantId = req.header("x-tenant-id");
-  if (!tenantId) return res.status(400).json({ error: "x-tenant-id header required" });
-  (req as any).tenantId = tenantId;
-  next();
-});
+auditLogRouter.use(tenantAuth);
 
 auditLogRouter.get("/", async (req, res) => {
   const tenantId = (req as any).tenantId as string;

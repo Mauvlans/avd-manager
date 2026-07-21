@@ -1,6 +1,6 @@
 import { withSystem } from "../db/pool";
 import { ScalingPolicyEvaluator } from "../services/scalingPolicyEvaluator";
-import { ArmHostPoolClient } from "../services/armHostPoolClient";
+import { ArmHostPoolClient, resolveVmNameFromResourceId } from "../services/armHostPoolClient";
 import { FakeTokenProvider } from "../services/tokenProvider";
 import { RetailPricesClient, CostEstimator } from "../services/costEstimator";
 import { writeAuditLog } from "../lib/auditLog";
@@ -95,10 +95,19 @@ export async function runAutoscaleTick(): Promise<void> {
       for (const action of decision.actions) {
         if (action.action === "deallocate_host") {
           await armClient.deleteSessionHost(row.subscription_id, row.resource_group, row.host_pool_name, action.hostName);
+        } else if (action.action === "start_host") {
+          const host = hosts.find((h) => h.name === action.hostName);
+          if (!host) {
+            console.error(`[autoscale] start_host action for unknown host ${action.hostName}, skipping`);
+            continue;
+          }
+          try {
+            const vmName = resolveVmNameFromResourceId(host.resourceId);
+            await armClient.startVm(row.subscription_id, row.resource_group, vmName);
+          } catch (err) {
+            console.error(`[autoscale] failed to start VM for host ${action.hostName}:`, err);
+          }
         }
-        // start_host in v1 is a stub: real implementation needs to call the
-        // underlying Microsoft.Compute VM start API, not DesktopVirtualization
-        // — tracked in PROGRESS.md.
       }
       await withSystem(async (client) => {
         await writeAuditLog(client, {

@@ -1,4 +1,4 @@
-import { ArmHostPoolClient, FetchLike, TokenProvider } from "../services/armHostPoolClient";
+import { ArmHostPoolClient, FetchLike, TokenProvider, resolveVmNameFromResourceId } from "../services/armHostPoolClient";
 
 class MockTokenProvider implements TokenProvider {
   async getArmToken(_entraTenantId: string): Promise<string> {
@@ -86,5 +86,49 @@ describe("ArmHostPoolClient (mocked ARM HTTP)", () => {
     expect(hosts[0].name).toBe("host1.contoso.com");
     expect(hosts[0].sessions).toBe(3);
     expect(hosts[0].status).toBe("Available");
+  });
+
+  it("startVm calls Microsoft.Compute start action (POST) with correct URL and auth", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: true,
+      status: 202,
+      json: async () => ({}),
+    })) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    await client.startVm("sub", "rg", "host1");
+
+    const [url, init] = (mockFetch as jest.Mock).mock.calls[0];
+    expect(url).toContain("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/host1/start");
+    expect(url).toContain("api-version=");
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe("Bearer mock-token");
+  });
+
+  it("startVm throws a descriptive error on failure (non-2xx, non-202)", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: { code: "AuthorizationFailed" } }),
+    })) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    await expect(client.startVm("sub", "rg", "host1")).rejects.toThrow(/403/);
+  });
+});
+
+describe("resolveVmNameFromResourceId", () => {
+  it("extracts the VM name from a well-formed ARM resourceId", () => {
+    const id = "/subscriptions/sub-id/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/host1";
+    expect(resolveVmNameFromResourceId(id)).toBe("host1");
+  });
+
+  it("is case-insensitive on the 'virtualMachines' segment", () => {
+    const id = "/subscriptions/sub-id/resourcegroups/rg/providers/microsoft.compute/VirtualMachines/host2";
+    expect(resolveVmNameFromResourceId(id)).toBe("host2");
+  });
+
+  it("throws when resourceId has no virtualMachines segment", () => {
+    expect(() => resolveVmNameFromResourceId("/subscriptions/sub-id/resourceGroups/rg")).toThrow(
+      /could not resolve VM name/
+    );
   });
 });

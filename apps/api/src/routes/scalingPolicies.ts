@@ -2,16 +2,12 @@ import { Router } from "express";
 import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { RetailPricesClient, CostEstimator } from "../services/costEstimator";
+import { tenantAuth } from "../middleware/tenantAuth";
 
 export const scalingPoliciesRouter = Router();
 export const costRouter = Router();
 
-scalingPoliciesRouter.use((req, res, next) => {
-  const tenantId = req.header("x-tenant-id");
-  if (!tenantId) return res.status(400).json({ error: "x-tenant-id header required" });
-  (req as any).tenantId = tenantId;
-  next();
-});
+scalingPoliciesRouter.use(tenantAuth);
 
 scalingPoliciesRouter.get("/", async (req, res) => {
   const tenantId = (req as any).tenantId as string;

@@ -52,10 +52,37 @@ export interface IArmHostPoolClient {
     hostPoolName: string,
     sessionHostName: string
   ): Promise<void>;
+  /** Starts the underlying VM for a session host via the Microsoft.Compute
+   * `start` action. This is a DIFFERENT resource provider than
+   * DesktopVirtualization — AVD session hosts are backed by a regular Azure
+   * VM resource, and "starting a host" for autoscale scale-out purposes
+   * means calling Compute's start action on that VM, not anything under
+   * Microsoft.DesktopVirtualization. `vmName` is the underlying VM resource
+   * name, which by AVD convention is usually (but not guaranteed to be)
+   * the same as the session host name's prefix before the FQDN suffix —
+   * callers should resolve this from the session host's `resourceId`
+   * rather than assuming string equality; see resolveVmNameFromResourceId. */
+  startVm(subscriptionId: string, resourceGroup: string, vmName: string): Promise<void>;
 }
 
 const ARM_API_VERSION = "2023-09-05"; // Microsoft.DesktopVirtualization stable API version
+const COMPUTE_API_VERSION = "2024-07-01"; // Microsoft.Compute stable API version
 const ARM_BASE = "https://management.azure.com";
+
+/**
+ * Given the full ARM resourceId of a session host's underlying VM (as
+ * returned in SessionHost.resourceId), extracts the VM resource name.
+ * Exported standalone (not just a private method) so it's independently
+ * unit-testable without needing a full ArmHostPoolClient instance.
+ */
+export function resolveVmNameFromResourceId(resourceId: string): string {
+  const parts = resourceId.split("/").filter(Boolean);
+  const idx = parts.findIndex((p) => p.toLowerCase() === "virtualmachines");
+  if (idx === -1 || !parts[idx + 1]) {
+    throw new Error(`could not resolve VM name from resourceId: ${resourceId}`);
+  }
+  return parts[idx + 1];
+}
 
 export class ArmHostPoolClient implements IArmHostPoolClient {
   constructor(
@@ -205,5 +232,28 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
       this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName, sessionHostName),
       "DELETE"
     );
+  }
+
+  private computeVmStartUrl(subscriptionId: string, resourceGroup: string, vmName: string): string {
+    return `${ARM_BASE}/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Compute/virtualMachines/${vmName}/start?api-version=${COMPUTE_API_VERSION}`;
+  }
+
+  async startVm(subscriptionId: string, resourceGroup: string, vmName: string): Promise<void> {
+    const headers = await this.authHeaders();
+    const res = await this.fetchImpl(this.computeVmStartUrl(subscriptionId, resourceGroup, vmName), {
+      method: "POST",
+      headers,
+    });
+    // Compute's async operations (start/stop/restart) return 200 (already
+    // running) or 202 (Accepted, operation in progress) — both are success
+    // for our purposes; we don't currently poll the Azure-AsyncOperation
+    // header to wait for completion (see PROGRESS.md: known limitation,
+    // start is fire-and-forget in v1).
+    if (!res.ok && res.status !== 202) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(
+        `ARM request failed: POST ${this.computeVmStartUrl(subscriptionId, resourceGroup, vmName)} -> ${res.status} ${JSON.stringify(errBody)}`
+      );
+    }
   }
 }

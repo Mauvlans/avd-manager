@@ -4,18 +4,11 @@ import { writeAuditLog } from "../lib/auditLog";
 import type { HostPoolType, LoadBalancerType } from "@avd-manager/shared";
 import { ArmHostPoolClient } from "../services/armHostPoolClient";
 import { FakeTokenProvider } from "../services/tokenProvider";
+import { tenantAuth } from "../middleware/tenantAuth";
 
 export const hostPoolsRouter = Router();
 
-/** Middleware convention: every route in this file expects req.tenantId to
- * be populated by upstream auth middleware (not implemented in this stub —
- * see PROGRESS.md). For now we accept it via header for local dev/testing. */
-hostPoolsRouter.use((req, res, next) => {
-  const tenantId = req.header("x-tenant-id");
-  if (!tenantId) return res.status(400).json({ error: "x-tenant-id header required" });
-  (req as any).tenantId = tenantId;
-  next();
-});
+hostPoolsRouter.use(tenantAuth);
 
 hostPoolsRouter.get("/", async (req, res) => {
   const tenantId = (req as any).tenantId as string;
