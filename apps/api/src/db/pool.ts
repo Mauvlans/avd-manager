@@ -18,7 +18,11 @@ export async function withTenant<T>(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SET LOCAL app.current_tenant = $1", [tenantId]);
+    // SET LOCAL does not support query parameters ($1) — Postgres only
+    // accepts a literal there. Use set_config(), which does accept a bound
+    // parameter and is the documented way to set a GUC per-transaction
+    // safely (avoids string-interpolation injection risk).
+    await client.query("SELECT set_config('app.current_tenant', $1, true)", [tenantId]);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
