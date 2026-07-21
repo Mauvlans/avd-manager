@@ -69,6 +69,26 @@ export function getDeployToAzureUrl(tenantId: string, subscriptionId?: string) {
   });
 }
 
+export interface SubscriptionsRegistryRow {
+  id: string;
+  tenant_id: string;
+  subscription_id: string;
+  resource_groups: string[];
+  rbac_role_definition_id: string | null;
+  rbac_grant_status: "not_requested" | "pending" | "granted" | "drifted" | "revoked";
+  rbac_last_verified_at: string | null;
+  rbac_drift_details: string | null;
+  graph_consent_status: "not_requested" | "pending" | "granted" | "revoked";
+  graph_consent_service_principal_id: string | null;
+  graph_consent_granted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getOnboardingRegistry(tenantId: string) {
+  return request<SubscriptionsRegistryRow[]>(`/api/onboarding/tenants/${tenantId}/registry`);
+}
+
 // --- Host pools (apps/api/src/routes/hostPools.ts) — tenant-scoped, needs x-tenant-id ---
 
 export interface HostPoolRow {

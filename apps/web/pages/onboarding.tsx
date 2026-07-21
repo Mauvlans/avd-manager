@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createTenant, getGraphConsentUrl, getDeployToAzureUrl } from "../lib/api";
+import { createTenant, getGraphConsentUrl, getDeployToAzureUrl, getOnboardingRegistry, SubscriptionsRegistryRow } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
 /**
@@ -8,11 +8,9 @@ import { useTenantId } from "../lib/useTenantId";
  *   1. Create tenant row (POST /api/onboarding/tenants)
  *   2. Get + visit Graph admin-consent URL (grant a)
  *   3. Get + visit Deploy-to-Azure Bicep RBAC template URL (grant b)
- *   4. Poll subscriptions_registry (via host-pools/scaling-policies calls
- *      once host pools exist) — for MVP we surface grant status by having
- *      the admin manually confirm/re-check, since there is no dedicated
- *      "get registry status" GET route yet (see PROGRESS.md: gap to add
- *      GET /api/onboarding/tenants/:id/registry).
+ *   4. Poll GET /api/onboarding/tenants/:id/registry every few seconds to
+ *      show live graph_consent_status/rbac_grant_status once the callback
+ *      endpoints fire — no more linking away to the audit log.
  */
 export default function Onboarding() {
   const [tenantId, setTenantId] = useTenantId();
@@ -23,6 +21,35 @@ export default function Onboarding() {
   const [deployUrl, setDeployUrl] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [registryRows, setRegistryRows] = useState<SubscriptionsRegistryRow[]>([]);
+  const [registryError, setRegistryError] = useState("");
+  const [registryLoading, setRegistryLoading] = useState(false);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    let cancelled = false;
+    async function poll() {
+      setRegistryLoading(true);
+      try {
+        const rows = await getOnboardingRegistry(tenantId);
+        if (!cancelled) {
+          setRegistryRows(rows);
+          setRegistryError("");
+        }
+      } catch (err) {
+        if (!cancelled) setRegistryError((err as Error).message);
+      } finally {
+        if (!cancelled) setRegistryLoading(false);
+      }
+    }
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [tenantId]);
+
 
   async function handleCreateTenant() {
     setError("");
@@ -139,18 +166,35 @@ export default function Onboarding() {
         <div className="step-num">4</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Grant status</h2>
-          <p className="warn">
-            The API records grant status via callback endpoints
-            (POST /api/onboarding/graph-consent/callback and /api/onboarding/rbac-grant/callback)
-            once the customer completes each step, but there is currently no dedicated
-            "read current registry status" GET route to poll here — this is a known gap (see
-            PROGRESS.md). For now, confirm grant completion via the Audit Log page, which will
-            show <span className="mono">graph_consent_granted</span> / <span className="mono">rbac_granted</span> entries once
-            the callbacks fire.
+          <p>
+            Polls <span className="mono">GET /api/onboarding/tenants/:id/registry</span> every 5s
+            once a tenant exists, showing the live <span className="mono">subscriptions_registry</span> row(s):
+            Graph consent status, RBAC grant status, subscription id, resource groups in scope, and
+            the last permission health-check result (from the RBAC drift-detection job).
           </p>
-          <a href="/audit-log">Go to Audit Log →</a>
+          {!tenantId && <p className="warn">Create a tenant in step 1 first.</p>}
+          {registryError && <p className="err">{registryError}</p>}
+          {tenantId && !registryError && registryRows.length === 0 && (
+            <p>{registryLoading ? "Checking…" : "No subscriptions_registry rows yet — complete steps 2/3 above, or wait for the callback to fire."}</p>
+          )}
+          {registryRows.map((row) => (
+            <div key={row.id} className="mono" style={{ marginTop: 12, borderTop: "1px solid #333", paddingTop: 8 }}>
+              <div>Subscription: {row.subscription_id}</div>
+              <div>Graph consent: {row.graph_consent_status}{row.graph_consent_granted_at ? ` (granted ${row.graph_consent_granted_at})` : ""}</div>
+              <div>
+                RBAC grant: {row.rbac_grant_status}
+                {row.rbac_last_verified_at ? ` (last verified ${row.rbac_last_verified_at})` : ""}
+              </div>
+              {row.rbac_drift_details && <div className="err">Drift: {row.rbac_drift_details}</div>}
+              <div>Resource groups in scope: {row.resource_groups.length ? row.resource_groups.join(", ") : "(none yet)"}</div>
+            </div>
+          ))}
+          <p style={{ marginTop: 12 }}>
+            Full history of these events is also in the <a href="/audit-log">Audit Log</a>.
+          </p>
         </div>
       </div>
+
 
       <div className="step">
         <div className="step-num">5</div>

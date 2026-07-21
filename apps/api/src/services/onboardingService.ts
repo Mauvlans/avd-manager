@@ -129,6 +129,25 @@ export class OnboardingService {
     );
     return rows[0] ?? null;
   }
+
+  /** Returns all subscriptions_registry rows for a tenant, for the
+   * onboarding wizard's status-poll step. Uses withTenant (RLS-scoped) since
+   * this is read on behalf of a specific tenant, not a system operation. */
+  async listRegistryRows(tenantId: string) {
+    return withTenant(tenantId, async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, tenant_id, subscription_id, resource_groups, rbac_role_definition_id,
+                rbac_grant_status, rbac_last_verified_at, rbac_drift_details,
+                graph_consent_status, graph_consent_service_principal_id, graph_consent_granted_at,
+                created_at, updated_at
+         FROM subscriptions_registry
+         WHERE tenant_id = $1
+         ORDER BY created_at ASC`,
+        [tenantId]
+      );
+      return rows;
+    });
+  }
 }
 
 export const requestCorrelationId = () => randomUUID();

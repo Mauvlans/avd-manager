@@ -43,6 +43,16 @@ onboardingRouter.get("/graph-consent/callback", async (req, res) => {
   res.json({ status: "recorded" });
 });
 
+/** Status-poll endpoint for the onboarding wizard: returns the tenant's
+ * subscriptions_registry row(s) — graph_consent_status/granted-at,
+ * rbac_grant_status/last-verified/drift-details, subscription id(s), and
+ * resource groups in scope. Lets the frontend poll for grant completion
+ * instead of requiring the admin to manually check the audit log. */
+onboardingRouter.get("/tenants/:tenantId/registry", async (req, res) => {
+  const rows = await onboardingService.listRegistryRows(req.params.tenantId);
+  res.json(rows);
+});
+
 /** Callback invoked by the Deploy-to-Azure template's deployment script (or
  * manually by an admin confirming the deployment) once the RBAC role +
  * assignment exist in the customer's subscription. */
