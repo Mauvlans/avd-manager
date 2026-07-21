@@ -27,8 +27,11 @@ describe("ArmHostPoolClient (mocked ARM HTTP)", () => {
       maxSessionLimit: 10,
     });
 
-    expect(result.name).toBe("pool1");
-    expect(result.hostPoolType).toBe("Pooled");
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome === "succeeded") {
+      expect(result.data.name).toBe("pool1");
+      expect(result.data.hostPoolType).toBe("Pooled");
+    }
 
     const [url, init] = (mockFetch as jest.Mock).mock.calls[0];
     expect(url).toContain("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.DesktopVirtualization/hostPools/pool1");
@@ -195,5 +198,199 @@ describe("resolveVmNameFromResourceId", () => {
     expect(() => resolveVmNameFromResourceId("/subscriptions/sub-id/resourceGroups/rg")).toThrow(
       /could not resolve VM name/
     );
+  });
+});
+
+describe("ArmHostPoolClient — createOrUpdateHostPool polling (Microsoft.DesktopVirtualization LRO)", () => {
+  it("returns immediate success on 200 without polling", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "/subscriptions/sub/.../hostPools/pool1",
+        name: "pool1",
+        location: "eastus",
+        properties: { hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+      }),
+      headers: { get: () => null },
+    })) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.createOrUpdateHostPool("sub", "rg", "pool1", {
+      location: "eastus",
+      hostPoolType: "Pooled",
+      loadBalancerType: "BreadthFirst",
+      maxSessionLimit: 10,
+    });
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome === "succeeded") expect(result.data.name).toBe("pool1");
+    expect((mockFetch as jest.Mock).mock.calls).toHaveLength(1);
+  });
+
+  it("polls Azure-AsyncOperation on 202, then re-fetches the resource on success", async () => {
+    let callCount = 0;
+    const mockFetch: FetchLike = jest.fn(async (url: string, init?: any) => {
+      callCount += 1;
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/hp1" : null) },
+        };
+      }
+      if (url === "https://management.azure.com/opstatus/hp1") {
+        return { ok: true, status: 200, json: async () => ({ status: "Succeeded" }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: "/subscriptions/sub/.../hostPools/pool1",
+          name: "pool1",
+          location: "eastus",
+          properties: { hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+        }),
+      };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.createOrUpdateHostPool(
+      "sub",
+      "rg",
+      "pool1",
+      { location: "eastus", hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+      { pollIntervalMs: 1 }
+    );
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome === "succeeded") expect(result.data.name).toBe("pool1");
+    expect(callCount).toBeGreaterThan(2);
+  });
+
+  it("reports failed outcome when the async operation fails", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/hp2" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "Failed", error: { code: "QuotaExceeded" } }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.createOrUpdateHostPool(
+      "sub",
+      "rg",
+      "pool2",
+      { location: "eastus", hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+      { pollIntervalMs: 1 }
+    );
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") expect(result.reason).toContain("QuotaExceeded");
+  });
+
+  it("times out if the operation never reaches a terminal state", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/hp3" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "InProgress" }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.createOrUpdateHostPool(
+      "sub",
+      "rg",
+      "pool3",
+      { location: "eastus", hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+      { timeoutMs: 5, pollIntervalMs: 2 }
+    );
+    expect(result.outcome).toBe("timeout");
+  });
+});
+
+describe("ArmHostPoolClient — deleteSessionHost polling", () => {
+  it("returns immediate success on 200/204 without polling", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: true,
+      status: 204,
+      json: async () => ({}),
+      headers: { get: () => null },
+    })) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.deleteSessionHost("sub", "rg", "pool1", "host1");
+    expect(result.outcome).toBe("succeeded");
+    expect((mockFetch as jest.Mock).mock.calls).toHaveLength(1);
+  });
+
+  it("polls Azure-AsyncOperation on 202 and reports success", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "DELETE") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/del1" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "Succeeded" }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.deleteSessionHost("sub", "rg", "pool1", "host1", { pollIntervalMs: 1 });
+    expect(result.outcome).toBe("succeeded");
+  });
+
+  it("reports failed outcome when the delete operation fails", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "DELETE") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/del2" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "Failed", error: { code: "ResourceBusy" } }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.deleteSessionHost("sub", "rg", "pool1", "host2", { pollIntervalMs: 1 });
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") expect(result.reason).toContain("ResourceBusy");
+  });
+
+  it("times out if the delete operation never reaches a terminal state", async () => {
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "DELETE") {
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({}),
+          headers: { get: (n: string) => (n.toLowerCase() === "azure-asyncoperation" ? "https://management.azure.com/opstatus/del3" : null) },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ status: "InProgress" }) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.deleteSessionHost("sub", "rg", "pool1", "host3", { timeoutMs: 5, pollIntervalMs: 2 });
+    expect(result.outcome).toBe("timeout");
+  });
+
+  it("falls back to polling for a 404 (gone) when no Azure-AsyncOperation header is returned", async () => {
+    let getCalls = 0;
+    const mockFetch: FetchLike = jest.fn(async (_url: string, init?: any) => {
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 202, json: async () => ({}), headers: { get: () => null } };
+      }
+      getCalls += 1;
+      if (getCalls < 2) return { ok: true, status: 200, json: async () => ({}) };
+      return { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as FetchLike;
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const result = await client.deleteSessionHost("sub", "rg", "pool1", "host4", { pollIntervalMs: 1 });
+    expect(result.outcome).toBe("succeeded");
   });
 });

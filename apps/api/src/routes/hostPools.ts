@@ -63,16 +63,25 @@ hostPoolsRouter.post("/", async (req, res) => {
 
   // Real ARM call — uses FakeTokenProvider in this sandbox since there's no
   // live tenant with granted RBAC. Swap for ClientCredentialsArmTokenProvider
-  // in production. Errors here are surfaced but do not roll back the DB
-  // record in v1 (see PROGRESS.md: needs reconciliation/retry logic).
+  // in production. Now polls to a real terminal state (see
+  // armHostPoolClient.createOrUpdateHostPool) instead of trusting a bare
+  // 202/201 Accepted; a failed/timed-out ARM outcome is surfaced in the
+  // response as a warning (still not rolled back — see PROGRESS.md's
+  // outbox/saga hardening follow-up for that).
   try {
     const armClient = new ArmHostPoolClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
-    await armClient.createOrUpdateHostPool(subscriptionId, resourceGroup, name, {
+    const result = await armClient.createOrUpdateHostPool(subscriptionId, resourceGroup, name, {
       location,
       hostPoolType: hostPoolType as HostPoolType,
       loadBalancerType: loadBalancerType as LoadBalancerType,
       maxSessionLimit: maxSessionLimit ?? 10,
     });
+    if (result.outcome !== "succeeded") {
+      return res.status(202).json({
+        ...created,
+        warning: `DB record created but ARM host pool creation did not succeed (${result.outcome}): ${result.reason}`,
+      });
+    }
   } catch (err) {
     return res.status(202).json({
       ...created,

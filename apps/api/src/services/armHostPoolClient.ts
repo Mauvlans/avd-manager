@@ -35,8 +35,9 @@ export interface IArmHostPoolClient {
       hostPoolType: HostPoolType;
       loadBalancerType: LoadBalancerType;
       maxSessionLimit: number;
-    }
-  ): Promise<HostPool>;
+    },
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<ArmLroResult<HostPool>>;
   deleteHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<void>;
   listSessionHosts(subscriptionId: string, resourceGroup: string, hostPoolName: string): Promise<SessionHost[]>;
   updateSessionHost(
@@ -46,12 +47,18 @@ export interface IArmHostPoolClient {
     sessionHostName: string,
     params: { allowNewSession: boolean }
   ): Promise<void>;
+  /** Deletes an AVD session host object (Microsoft.DesktopVirtualization,
+   * NOT the underlying VM). DELETE returns 202 Accepted with an
+   * Azure-AsyncOperation header while ARM removes the object; this now
+   * polls to a terminal state instead of assuming the DELETE succeeded the
+   * instant the request returned, the same pattern as startVm. */
   deleteSessionHost(
     subscriptionId: string,
     resourceGroup: string,
     hostPoolName: string,
-    sessionHostName: string
-  ): Promise<void>;
+    sessionHostName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<ArmLroResult<void>>;
   /** Starts the underlying VM for a session host via the Microsoft.Compute
    * `start` action. This is a DIFFERENT resource provider than
    * DesktopVirtualization — AVD session hosts are backed by a regular Azure
@@ -77,6 +84,17 @@ export interface IArmHostPoolClient {
 
 export type VmStartResult =
   | { outcome: "succeeded" }
+  | { outcome: "failed"; reason: string }
+  | { outcome: "timeout"; reason: string };
+
+/** Generic long-running-operation result shape, reused for any ARM call
+ * that returns 202/201 Accepted and requires polling to confirm real
+ * outcome (deleteSessionHost, createOrUpdateHostPool), in addition to
+ * startVm's VmStartResult. `data` is only present on "succeeded" for calls
+ * that return a resource body (createOrUpdateHostPool); omitted for
+ * void-returning calls (deleteSessionHost). */
+export type ArmLroResult<T = void> =
+  | ({ outcome: "succeeded" } & (T extends void ? {} : { data: T }))
   | { outcome: "failed"; reason: string }
   | { outcome: "timeout"; reason: string };
 
@@ -132,17 +150,31 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
   }
 
   private async request(url: string, method: string, body?: unknown) {
+    const { data } = await this.requestWithHeaders(url, method, body);
+    return data;
+  }
+
+  /** Like `request`, but also returns response headers so callers that
+   * need to inspect Azure-AsyncOperation / Location (createOrUpdateHostPool,
+   * deleteSessionHost) can poll the LRO to a terminal state instead of
+   * trusting the 201/202 response body alone. */
+  private async requestWithHeaders(
+    url: string,
+    method: string,
+    body?: unknown
+  ): Promise<{ data: any; status: number; headers?: { get(name: string): string | null } }> {
     const headers = await this.authHeaders();
     const res = await this.fetchImpl(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) {
+    if (!res.ok && res.status !== 202) {
       const errBody = await res.json().catch(() => ({}));
       throw new Error(`ARM request failed: ${method} ${url} -> ${res.status} ${JSON.stringify(errBody)}`);
     }
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    return { data, status: res.status, headers: res.headers };
   }
 
   private mapArmHostPool(subscriptionId: string, resourceGroup: string, armObj: any, tenantId = ""): HostPool {
@@ -186,8 +218,9 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
       hostPoolType: HostPoolType;
       loadBalancerType: LoadBalancerType;
       maxSessionLimit: number;
-    }
-  ): Promise<HostPool> {
+    },
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<ArmLroResult<HostPool>> {
     const body = {
       location: params.location,
       properties: {
@@ -197,8 +230,60 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
         preferredAppGroupType: "Desktop",
       },
     };
-    const data = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup, name), "PUT", body);
-    return this.mapArmHostPool(subscriptionId, resourceGroup, data);
+    const url = this.hostPoolUrl(subscriptionId, resourceGroup, name);
+    const { data, status, headers } = await this.requestWithHeaders(url, "PUT", body);
+
+    // 200/201 both mean the PUT completed synchronously — ARM returns the
+    // final resource body immediately, nothing to poll.
+    if (status === 200 || status === 201) {
+      return { outcome: "succeeded", data: this.mapArmHostPool(subscriptionId, resourceGroup, data) };
+    }
+
+    // 202 Accepted: poll to a terminal state instead of assuming the PUT
+    // succeeded just because the request itself didn't throw.
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const pollIntervalMs = opts?.pollIntervalMs ?? 5_000;
+    const deadline = Date.now() + timeoutMs;
+    const asyncOpUrl = headers?.get?.("Azure-AsyncOperation") ?? headers?.get?.("azure-asyncoperation");
+    if (asyncOpUrl) {
+      const result = await this.pollAsyncOperation(asyncOpUrl, deadline, pollIntervalMs);
+      if (result.outcome !== "succeeded") return result;
+    } else {
+      // No async-operation header — fall back to polling the host pool
+      // resource itself for a stable/terminal-looking response (ARM doesn't
+      // expose a provisioningState on hostPools the way it does on VMs, so
+      // "the GET succeeds and returns the name we expect" is the best
+      // available terminal signal without a real Azure subscription to
+      // validate against).
+      const pollResult = await this.pollHostPoolExists(subscriptionId, resourceGroup, name, deadline, pollIntervalMs);
+      if (pollResult.outcome !== "succeeded") return pollResult;
+    }
+
+    // Re-fetch the final resource so the returned data reflects the
+    // terminal state, not the possibly-incomplete 202 response body.
+    const finalData = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup, name), "GET");
+    return { outcome: "succeeded", data: this.mapArmHostPool(subscriptionId, resourceGroup, finalData) };
+  }
+
+  private async pollHostPoolExists(
+    subscriptionId: string,
+    resourceGroup: string,
+    name: string,
+    deadline: number,
+    pollIntervalMs: number
+  ): Promise<ArmLroResult<void>> {
+    const headers = await this.authHeaders();
+    const url = this.hostPoolUrl(subscriptionId, resourceGroup, name);
+    while (Date.now() < deadline) {
+      const res = await this.fetchImpl(url, { method: "GET", headers });
+      if (res.ok) return { outcome: "succeeded" } as ArmLroResult<void>;
+      if (res.status !== 404) {
+        const errBody = await res.json().catch(() => ({}));
+        return { outcome: "failed", reason: `poll request failed: ${res.status} ${JSON.stringify(errBody)}` };
+      }
+      await this.sleep(pollIntervalMs);
+    }
+    return { outcome: "timeout", reason: "host pool did not become visible within the polling deadline" };
   }
 
   async deleteHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<void> {
@@ -241,12 +326,75 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
     subscriptionId: string,
     resourceGroup: string,
     hostPoolName: string,
-    sessionHostName: string
-  ): Promise<void> {
-    await this.request(
-      this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName, sessionHostName),
-      "DELETE"
-    );
+    sessionHostName: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<ArmLroResult<void>> {
+    const url = this.sessionHostUrl(subscriptionId, resourceGroup, hostPoolName, sessionHostName);
+    const { status, headers } = await this.requestWithHeaders(url, "DELETE");
+
+    // 200/204 mean the delete already completed synchronously.
+    if (status === 200 || status === 204) {
+      return { outcome: "succeeded" } as ArmLroResult<void>;
+    }
+
+    // 202 Accepted: poll for real completion instead of assuming the
+    // session host object is actually gone.
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const pollIntervalMs = opts?.pollIntervalMs ?? 5_000;
+    const deadline = Date.now() + timeoutMs;
+    const asyncOpUrl = headers?.get?.("Azure-AsyncOperation") ?? headers?.get?.("azure-asyncoperation");
+    if (asyncOpUrl) {
+      return this.pollAsyncOperation(asyncOpUrl, deadline, pollIntervalMs);
+    }
+    // No Azure-AsyncOperation header: fall back to polling for the session
+    // host object to actually disappear (404), the terminal signal for a
+    // delete when there's no LRO status endpoint to check.
+    return this.pollSessionHostGone(url, deadline, pollIntervalMs);
+  }
+
+  private async pollSessionHostGone(
+    url: string,
+    deadline: number,
+    pollIntervalMs: number
+  ): Promise<ArmLroResult<void>> {
+    const headers = await this.authHeaders();
+    while (Date.now() < deadline) {
+      const res = await this.fetchImpl(url, { method: "GET", headers });
+      if (res.status === 404) return { outcome: "succeeded" } as ArmLroResult<void>;
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        return { outcome: "failed", reason: `poll request failed: ${res.status} ${JSON.stringify(errBody)}` };
+      }
+      await this.sleep(pollIntervalMs);
+    }
+    return { outcome: "timeout", reason: "session host was not removed within the polling deadline" };
+  }
+
+  /** Polls an Azure-AsyncOperation status URL until it reports a terminal
+   * status or the deadline passes. Shared by createOrUpdateHostPool and
+   * deleteSessionHost (startVm has its own pollUntilTerminal which also
+   * supports the provisioningState fallback shape used by Compute). */
+  private async pollAsyncOperation(
+    url: string,
+    deadline: number,
+    pollIntervalMs: number
+  ): Promise<ArmLroResult<void>> {
+    const headers = await this.authHeaders();
+    while (Date.now() < deadline) {
+      const res = await this.fetchImpl(url, { method: "GET", headers });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        return { outcome: "failed", reason: `poll request failed: ${res.status} ${JSON.stringify(errBody)}` };
+      }
+      const data = await res.json();
+      const status: string | undefined = data.status;
+      if (status === "Succeeded") return { outcome: "succeeded" } as ArmLroResult<void>;
+      if (status === "Failed" || status === "Canceled") {
+        return { outcome: "failed", reason: data.error ? JSON.stringify(data.error) : `operation status=${status}` };
+      }
+      await this.sleep(pollIntervalMs);
+    }
+    return { outcome: "timeout", reason: "did not reach a terminal state within the polling deadline" };
   }
 
   private computeVmStartUrl(subscriptionId: string, resourceGroup: string, vmName: string): string {

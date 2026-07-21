@@ -95,7 +95,16 @@ export async function runAutoscaleTick(): Promise<void> {
       const failures: string[] = [];
       for (const action of decision.actions) {
         if (action.action === "deallocate_host") {
-          await armClient.deleteSessionHost(row.subscription_id, row.resource_group, row.host_pool_name, action.hostName);
+          try {
+            const result = await armClient.deleteSessionHost(row.subscription_id, row.resource_group, row.host_pool_name, action.hostName);
+            if (result.outcome !== "succeeded") {
+              console.error(`[autoscale] deallocate_host for ${action.hostName} did not succeed: ${result.outcome} — ${result.reason}`);
+              failures.push(`${action.hostName}: ${result.outcome} — ${result.reason}`);
+            }
+          } catch (err) {
+            console.error(`[autoscale] failed to delete session host ${action.hostName}:`, err);
+            failures.push(`${action.hostName}: request error — ${err instanceof Error ? err.message : String(err)}`);
+          }
         } else if (action.action === "start_host") {
           const host = hosts.find((h) => h.name === action.hostName);
           if (!host) {
