@@ -5,6 +5,7 @@ import { onboardingRouter } from "./routes/onboarding";
 import { hostPoolsRouter } from "./routes/hostPools";
 import { scalingPoliciesRouter, costRouter } from "./routes/scalingPolicies";
 import { auditLogRouter } from "./routes/auditLog";
+import { setupRouter } from "./routes/setup";
 
 const app = express();
 app.use(cors());
@@ -17,6 +18,7 @@ app.use("/api/host-pools", hostPoolsRouter);
 app.use("/api/scaling-policies", scalingPoliciesRouter);
 app.use("/api/cost", costRouter);
 app.use("/api/audit-log", auditLogRouter);
+app.use("/api/setup", setupRouter);
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {

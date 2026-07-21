@@ -8,6 +8,7 @@ export default function App({ Component, pageProps }: AppProps) {
       <header className="nav">
         <strong>AVD Manager</strong>
         <nav>
+          <Link href="/setup">Platform Setup</Link>
           <Link href="/onboarding">Onboarding</Link>
           <Link href="/host-pools">Host Pools</Link>
           <Link href="/cost">Cost</Link>
