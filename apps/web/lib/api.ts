@@ -55,12 +55,8 @@ async function request<T>(
 
 // --- Onboarding (apps/api/src/routes/onboarding.ts) ---
 
-export function createTenant(input: { displayName: string; entraTenantId: string }) {
-  return request<{ id: string }>("/api/onboarding/tenants", { method: "POST", body: input });
-}
-
-export function getGraphConsentUrl(tenantId: string) {
-  return request<{ url: string }>(`/api/onboarding/tenants/${tenantId}/graph-consent-url`);
+export function getGraphConsentUrl(nonce: string) {
+  return request<{ url: string; nonce: string }>("/api/onboarding/graph-consent-url", { query: { nonce } });
 }
 
 export function getDeployToAzureUrl(tenantId: string, subscriptionId?: string) {
@@ -72,7 +68,7 @@ export function getDeployToAzureUrl(tenantId: string, subscriptionId?: string) {
 export interface SubscriptionsRegistryRow {
   id: string;
   tenant_id: string;
-  subscription_id: string;
+  subscription_id: string | null;
   resource_groups: string[];
   rbac_role_definition_id: string | null;
   rbac_grant_status: "not_requested" | "pending" | "granted" | "drifted" | "revoked";

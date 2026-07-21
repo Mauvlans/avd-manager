@@ -73,12 +73,19 @@ export class GraphClient implements IGraphClient {
   }
 }
 
-/**
- * Builds the Graph admin-consent URL a customer's Global Admin visits to
+/** Builds the Graph admin-consent URL a customer's Global Admin visits to
  * grant our multi-tenant app the requested scopes in their tenant. This is
  * grant (a) in the two-grant onboarding model — see README. No RBAC/Azure
  * resource access is implied by this URL; that's the separate Bicep-based
  * grant (b).
+ *
+ * Deliberately does NOT take a tenantId — at this point in onboarding we
+ * don't know the customer's tenant yet (that's exactly what this consent
+ * flow discovers: Microsoft's own redirect back to our callback includes
+ * `tenant=<real Entra tenant GUID>`). `state` here is a purely
+ * client-generated correlation nonce so the browser can match the eventual
+ * redirect back to itself — it is NOT a tenant id (that was the old, wrong
+ * design this replaces; see onboardingService.recordGraphConsentGranted).
  */
 export function buildAdminConsentUrl(params: {
   clientId: string;

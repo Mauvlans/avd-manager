@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createTenant, getGraphConsentUrl, getDeployToAzureUrl, getOnboardingRegistry, SubscriptionsRegistryRow } from "../lib/api";
+import { getGraphConsentUrl, getDeployToAzureUrl, getOnboardingRegistry, SubscriptionsRegistryRow } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
@@ -45,16 +45,36 @@ interface CreatedAppRegistration {
  */
 export default function Onboarding() {
   const [tenantId, setTenantId] = useTenantId();
-  const [displayName, setDisplayName] = useState("");
-  const [entraTenantId, setEntraTenantId] = useState("");
+  const [consentNonce, setConsentNonce] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
   const [consentUrl, setConsentUrl] = useState("");
   const [deployUrl, setDeployUrl] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const [registryRows, setRegistryRows] = useState<SubscriptionsRegistryRow[]>([]);
   const [registryError, setRegistryError] = useState("");
   const [registryLoading, setRegistryLoading] = useState(false);
+
+  // Pick up tenantId from the query string once the browser returns from
+  // Microsoft's admin-consent redirect (see routes/onboarding.ts's
+  // graph-consent/callback — it 302s the browser tab back here with
+  // ?tenantId=...&consentDone=1 instead of returning bare JSON, since that
+  // tab is a full top-level navigation, not an XHR our SPA code can read
+  // directly). This is what replaces the old manual "type in a tenant
+  // GUID and click Create" step entirely.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const fromRedirect = params.get("tenantId");
+    const consentError = params.get("consentError");
+    if (fromRedirect) {
+      setTenantId(fromRedirect);
+      window.history.replaceState({}, "", "/onboarding");
+    } else if (consentError) {
+      setError(`Graph consent redirect error: ${consentError}`);
+      window.history.replaceState({}, "", "/onboarding");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Platform Setup (step 0) ---
   const [platformConfigured, setPlatformConfigured] = useState<boolean | null>(null);
@@ -167,23 +187,12 @@ export default function Onboarding() {
     };
   }, [tenantId]);
 
-  async function handleCreateTenant() {
-    setError("");
-    setBusy(true);
-    try {
-      const tenant = await createTenant({ displayName, entraTenantId });
-      setTenantId(tenant.id);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleGetConsentUrl() {
     setError("");
     try {
-      const { url } = await getGraphConsentUrl(tenantId);
+      const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const { url } = await getGraphConsentUrl(nonce);
+      setConsentNonce(nonce);
       setConsentUrl(url);
     } catch (err) {
       setError((err as Error).message);
@@ -262,36 +271,18 @@ export default function Onboarding() {
       <div className="step">
         <div className="step-num">1</div>
         <div className="card" style={{ flex: 1 }}>
-          <h2 style={{ marginTop: 0 }}>Create tenant</h2>
-          <label>Display name</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Contoso Ltd" />
-          <label>Customer&apos;s Entra (AAD) tenant GUID</label>
-          <input
-            value={entraTenantId}
-            onChange={(e) => setEntraTenantId(e.target.value)}
-            placeholder="00000000-0000-0000-0000-000000000000"
-          />
-          <button onClick={handleCreateTenant} disabled={busy || !displayName || !entraTenantId}>
-            Create tenant
-          </button>
-          {tenantId && (
-            <p style={{ marginTop: 12 }}>
-              Tenant created: <span className="mono">{tenantId}</span>
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="step">
-        <div className="step-num">2</div>
-        <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Graph admin consent (grant a)</h2>
           <p>
             Send the customer&apos;s Entra admin this link. It requests the Graph application
             permissions our multi-tenant app registration needs (read directory objects for host
             pool assignment lookups, etc.) — no Azure Lighthouse involved.
           </p>
-          <button className="secondary" onClick={handleGetConsentUrl} disabled={!tenantId}>
+          <p>
+            No need to type in the customer&apos;s tenant GUID or a display name — Microsoft&apos;s own
+            consent redirect tells us who just granted consent, and the tenant record is created
+            automatically from that.
+          </p>
+          <button className="secondary" onClick={handleGetConsentUrl}>
             Generate admin-consent link
           </button>
           {consentUrl && (
@@ -301,11 +292,22 @@ export default function Onboarding() {
               </a>
             </p>
           )}
+          {tenantId && (
+            <p style={{ marginTop: 12 }} className="ok">
+              Consent recorded — tenant <span className="mono">{tenantId}</span> created automatically.
+            </p>
+          )}
+          {!tenantId && consentUrl && (
+            <p className="warn" style={{ marginTop: 12 }}>
+              Open the link above in a new tab and complete sign-in — that tab will redirect back here
+              once consent is recorded.
+            </p>
+          )}
         </div>
       </div>
 
       <div className="step">
-        <div className="step-num">3</div>
+        <div className="step-num">2</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Deploy-to-Azure RBAC role (grant b)</h2>
           <p>
@@ -333,7 +335,7 @@ export default function Onboarding() {
       </div>
 
       <div className="step">
-        <div className="step-num">4</div>
+        <div className="step-num">3</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Grant status</h2>
           <p>
@@ -342,10 +344,10 @@ export default function Onboarding() {
             Graph consent status, RBAC grant status, subscription id, resource groups in scope, and
             the last permission health-check result (from the RBAC drift-detection job).
           </p>
-          {!tenantId && <p className="warn">Create a tenant in step 1 first.</p>}
+          {!tenantId && <p className="warn">Complete step 1 (Graph consent) first.</p>}
           {registryError && <p className="err">{registryError}</p>}
           {tenantId && !registryError && registryRows.length === 0 && (
-            <p>{registryLoading ? "Checking…" : "No subscriptions_registry rows yet — complete steps 2/3 above, or wait for the callback to fire."}</p>
+            <p>{registryLoading ? "Checking…" : "No subscriptions_registry rows yet — complete step 2 above, or wait for the callback to fire."}</p>
           )}
           {registryRows.map((row) => (
             <div key={row.id} className="mono" style={{ marginTop: 12, borderTop: "1px solid #333", paddingTop: 8 }}>
@@ -367,7 +369,7 @@ export default function Onboarding() {
 
 
       <div className="step">
-        <div className="step-num">5</div>
+        <div className="step-num">4</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Done</h2>
           <p>Once both grants show as granted in the audit log, proceed to <a href="/host-pools">Host Pools</a> to provision your first host pool.</p>

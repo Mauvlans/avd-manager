@@ -21,17 +21,15 @@ onboardingRouter.get("/platform-status", (_req, res) => {
   res.json({ configured: isPlatformConfigured(), clientId: getPlatformConfig().clientId });
 });
 
-onboardingRouter.post("/tenants", async (req, res) => {
-  const { displayName, entraTenantId } = req.body ?? {};
-  if (!displayName || !entraTenantId) {
-    return res.status(400).json({ error: "displayName and entraTenantId are required" });
-  }
-  const tenant = await getOnboardingService().createTenant({ displayName, entraTenantId });
-  res.status(201).json(tenant);
-});
-
-onboardingRouter.get("/tenants/:tenantId/graph-consent-url", (req, res) => {
-  res.json({ url: getOnboardingService().getAdminConsentUrl(req.params.tenantId) });
+/** Step 1 of the wizard: get a fresh Graph admin-consent link. `nonce` is a
+ * client-generated correlation value (not a tenant id — we don't know the
+ * customer's tenant yet, that's what consent discovers). No tenant record
+ * is created here; it's auto-created from Microsoft's own consent
+ * callback below, which is the point of this design — see
+ * onboardingService.ts docstring. */
+onboardingRouter.get("/graph-consent-url", (req, res) => {
+  const nonce = typeof req.query.nonce === "string" ? req.query.nonce : Math.random().toString(36).slice(2);
+  res.json({ url: getOnboardingService().getAdminConsentUrl(nonce), nonce });
 });
 
 onboardingRouter.get("/tenants/:tenantId/deploy-to-azure-url", (req, res) => {
@@ -39,19 +37,36 @@ onboardingRouter.get("/tenants/:tenantId/deploy-to-azure-url", (req, res) => {
   res.json({ url: getOnboardingService().getDeployToAzureUrl(req.params.tenantId, subscriptionId) });
 });
 
-/** Callback the customer's browser (or our own redirect handler) hits after
- * admin consent completes. `state` carries the tenant id we set when
- * building the consent URL. In production this should validate the OAuth
- * response signature/anti-CSRF token, not just trust the query string. */
+/** Callback the customer's browser hits after admin consent completes.
+ * Microsoft's own redirect includes `tenant` (the real Entra tenant GUID)
+ * and, once resolvable, the resulting service principal id. This call
+ * auto-creates (or reuses) the tenant row — the wizard never asked the
+ * admin to type in a tenant GUID or display name manually; Microsoft's
+ * redirect is the source of truth for both.
+ *
+ * Since the admin-consent link opens in a new browser tab/window (the
+ * wizard uses target="_blank" so the original wizard tab stays open),
+ * this redirects that tab back to the web app's onboarding page with the
+ * resulting tenantId in the query string, instead of returning bare JSON
+ * — the onboarding page picks that up on mount and persists it via
+ * useTenantId, continuing the wizard with no manual "create tenant" step
+ * and no manual tenant-id copy/paste between tabs. */
 onboardingRouter.get("/graph-consent/callback", async (req, res) => {
-  const tenantId = String(req.query.state ?? "");
-  const subscriptionId = String(req.query.subscriptionId ?? "");
-  const servicePrincipalId = String(req.query.servicePrincipalId ?? req.query.tenant ?? "");
-  if (!tenantId || !subscriptionId || !servicePrincipalId) {
-    return res.status(400).json({ error: "missing tenantId/subscriptionId/servicePrincipalId" });
+  const entraTenantId = String(req.query.tenant ?? "");
+  const servicePrincipalId = String(req.query.servicePrincipalId ?? "");
+  const displayNameHint = typeof req.query.displayName === "string" ? req.query.displayName : undefined;
+  const webAppBaseUrl = process.env.WEB_APP_BASE_URL || "http://localhost:3000";
+  if (!entraTenantId || !servicePrincipalId) {
+    return res
+      .status(400)
+      .redirect(`${webAppBaseUrl}/onboarding?consentError=${encodeURIComponent("missing tenant/servicePrincipalId from consent redirect")}`);
   }
-  await getOnboardingService().recordGraphConsentGranted(tenantId, subscriptionId, servicePrincipalId);
-  res.json({ status: "recorded" });
+  const { tenantId } = await getOnboardingService().recordGraphConsentGranted(
+    entraTenantId,
+    servicePrincipalId,
+    displayNameHint
+  );
+  res.redirect(`${webAppBaseUrl}/onboarding?tenantId=${tenantId}&consentDone=1`);
 });
 
 /** Status-poll endpoint for the onboarding wizard: returns the tenant's

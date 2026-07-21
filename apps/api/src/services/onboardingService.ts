@@ -4,19 +4,21 @@ import { withTenant, withSystem } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { buildAdminConsentUrl } from "../services/graphClient";
 
-export interface CreateTenantInput {
-  displayName: string;
-  entraTenantId: string;
-}
-
 /**
- * Onboarding service: creates the tenant row, generates the Graph
- * admin-consent link and Deploy-to-Azure RBAC template link, and records
- * grant status callbacks in subscriptions_registry.
+ * Onboarding service: generates the Graph admin-consent link and
+ * Deploy-to-Azure RBAC template link, and records grant status callbacks in
+ * tenants/subscriptions_registry.
+ *
+ * Auto-creates the tenant row from Microsoft's own OAuth admin-consent
+ * redirect (which includes the real Entra tenant GUID) rather than asking
+ * the operator to manually type in a display name + tenant GUID before
+ * consent even happens — that manual step was pure duplication of
+ * information Microsoft hands us for free in the callback, and it invited
+ * typos in a GUID a human was never meant to transcribe.
  *
  * This is grant-tracking plumbing only — it does not itself call Graph or
- * Azure; it produces the URLs the customer's admin visits, and records the
- * *result* of those visits via callback endpoints.
+ * Azure resource APIs; it produces the URLs the customer's admin visits,
+ * and records the *result* of those visits via callback endpoints.
  */
 export class OnboardingService {
   constructor(
@@ -25,27 +27,19 @@ export class OnboardingService {
     private readonly deployToAzureTemplateUrl: string
   ) {}
 
-  /** Privileged: creates a new tenant row. Bypasses per-tenant RLS since
-   * there is no tenant context yet at creation time. */
-  async createTenant(input: CreateTenantInput): Promise<{ id: string }> {
-    return withSystem(async (client) => {
-      const { rows } = await client.query(
-        `INSERT INTO tenants (display_name, entra_tenant_id, status)
-         VALUES ($1, $2, 'onboarding') RETURNING id`,
-        [input.displayName, input.entraTenantId]
-      );
-      return { id: rows[0].id };
-    });
-  }
-
-  /** Builds the Graph admin-consent URL (grant a) for a tenant to complete
-   * onboarding. `state` should encode the tenant id so the callback can
-   * correlate the consent grant back to the right tenant row. */
-  getAdminConsentUrl(tenantId: string): string {
+  /** Builds the Graph admin-consent URL (grant a) to start onboarding a new
+   * customer. `state` is a client-generated correlation nonce, not a tenant
+   * id — we don't know the customer's tenant yet. Callers should generate
+   * a fresh nonce per attempt (e.g. randomUUID()) purely so the browser
+   * can recognize its own redirect coming back; the server does not persist
+   * or validate this nonce today (documented gap — a real implementation
+   * should validate it against a short-lived, server-issued anti-CSRF
+   * value instead of trusting whatever the browser echoes back). */
+  getAdminConsentUrl(correlationNonce: string): string {
     return buildAdminConsentUrl({
       clientId: this.appClientId,
       redirectUri: this.graphRedirectUri,
-      state: tenantId,
+      state: correlationNonce,
     });
   }
 
@@ -60,40 +54,61 @@ export class OnboardingService {
   }
 
   /** Callback invoked after the customer's admin completes Graph consent.
-   * Records the resulting service principal id and marks graph_consent_status
-   * granted for the subscriptions_registry row(s) for this tenant — or, if
-   * none exist yet for this subscription, upserts a placeholder row scoped
-   * to graph-only until the RBAC grant (a separate flow) adds Azure scope. */
+   * Microsoft's redirect includes the real Entra tenant GUID (`tenant`
+   * query param) and the resulting service principal id — this is the
+   * FIRST time we learn who the customer is, so this call auto-creates (or
+   * reuses, if this Entra tenant already onboarded before) the tenant row,
+   * instead of requiring a prior manual "create tenant" step.
+   *
+   * Privileged (withSystem): tenant creation legitimately spans tenants
+   * (there's no RLS context yet for a tenant we're only just learning
+   * about). Returns the tenant id so the frontend can pick up the wizard's
+   * remaining steps (Deploy-to-Azure link, registry status polling)
+   * without ever having asked the admin to type in a GUID. */
   async recordGraphConsentGranted(
-    tenantId: string,
-    subscriptionId: string,
-    servicePrincipalId: string
-  ): Promise<void> {
-    await withTenant(tenantId, async (client) => {
-      const before = await this.getRegistryRow(client, tenantId, subscriptionId);
+    entraTenantId: string,
+    servicePrincipalId: string,
+    displayNameHint?: string
+  ): Promise<{ tenantId: string }> {
+    return withSystem(async (client) => {
+      const upserted = await client.query(
+        `INSERT INTO tenants (display_name, entra_tenant_id, status)
+         VALUES ($1, $2, 'onboarding')
+         ON CONFLICT (entra_tenant_id) DO UPDATE SET updated_at = now()
+         RETURNING id`,
+        [displayNameHint || entraTenantId, entraTenantId]
+      );
+      const tenantId = upserted.rows[0].id;
+
+      const before = await this.getPendingRegistryRow(client, tenantId);
       await client.query(
         `INSERT INTO subscriptions_registry (tenant_id, subscription_id, graph_consent_status, graph_consent_service_principal_id, graph_consent_granted_at)
-         VALUES ($1, $2, 'granted', $3, now())
-         ON CONFLICT (tenant_id, subscription_id)
-         DO UPDATE SET graph_consent_status = 'granted', graph_consent_service_principal_id = $3, graph_consent_granted_at = now(), updated_at = now()`,
-        [tenantId, subscriptionId, servicePrincipalId]
+         VALUES ($1, NULL, 'granted', $2, now())
+         ON CONFLICT (tenant_id) WHERE subscription_id IS NULL
+         DO UPDATE SET graph_consent_status = 'granted', graph_consent_service_principal_id = $2, graph_consent_granted_at = now(), updated_at = now()`,
+        [tenantId, servicePrincipalId]
       );
-      const after = await this.getRegistryRow(client, tenantId, subscriptionId);
+      const after = await this.getPendingRegistryRow(client, tenantId);
       await writeAuditLog(client, {
         tenantId,
         actor: "system:graph-consent-callback",
         action: "graph_consent_granted",
         resourceType: "subscriptions_registry",
-        resourceId: subscriptionId,
+        resourceId: tenantId,
         beforeState: before,
         afterState: after,
       });
+      return { tenantId };
     });
   }
 
   /** Callback invoked after the customer runs the Deploy-to-Azure RBAC
    * template. Records which role definition was assigned and to which
-   * resource groups. */
+   * resource groups. If a pending (subscription_id IS NULL) row exists from
+   * the Graph-consent step above, this fills the subscription id into that
+   * same row rather than creating a second one — Graph consent and RBAC
+   * grant are two separate authorization surfaces for the SAME onboarding
+   * event, not two unrelated registry rows. */
   async recordRbacGranted(
     tenantId: string,
     subscriptionId: string,
@@ -101,14 +116,27 @@ export class OnboardingService {
     resourceGroups: string[]
   ): Promise<void> {
     await withTenant(tenantId, async (client) => {
-      const before = await this.getRegistryRow(client, tenantId, subscriptionId);
-      await client.query(
-        `INSERT INTO subscriptions_registry (tenant_id, subscription_id, resource_groups, rbac_role_definition_id, rbac_grant_status, rbac_last_verified_at)
-         VALUES ($1, $2, $3, $4, 'granted', now())
-         ON CONFLICT (tenant_id, subscription_id)
-         DO UPDATE SET resource_groups = $3, rbac_role_definition_id = $4, rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now()`,
-        [tenantId, subscriptionId, resourceGroups, roleDefinitionId]
-      );
+      const pending = await this.getPendingRegistryRow(client, tenantId);
+      const before = pending ?? (await this.getRegistryRow(client, tenantId, subscriptionId));
+
+      if (pending) {
+        await client.query(
+          `UPDATE subscriptions_registry
+           SET subscription_id = $2, resource_groups = $3, rbac_role_definition_id = $4,
+               rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now()
+           WHERE id = $1`,
+          [pending.id, subscriptionId, resourceGroups, roleDefinitionId]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO subscriptions_registry (tenant_id, subscription_id, resource_groups, rbac_role_definition_id, rbac_grant_status, rbac_last_verified_at)
+           VALUES ($1, $2, $3, $4, 'granted', now())
+           ON CONFLICT (tenant_id, subscription_id)
+           DO UPDATE SET resource_groups = $3, rbac_role_definition_id = $4, rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now()`,
+          [tenantId, subscriptionId, resourceGroups, roleDefinitionId]
+        );
+      }
+
       const after = await this.getRegistryRow(client, tenantId, subscriptionId);
       await writeAuditLog(client, {
         tenantId,
@@ -126,6 +154,14 @@ export class OnboardingService {
     const { rows } = await client.query(
       `SELECT * FROM subscriptions_registry WHERE tenant_id = $1 AND subscription_id = $2`,
       [tenantId, subscriptionId]
+    );
+    return rows[0] ?? null;
+  }
+
+  private async getPendingRegistryRow(client: PoolClient, tenantId: string) {
+    const { rows } = await client.query(
+      `SELECT * FROM subscriptions_registry WHERE tenant_id = $1 AND subscription_id IS NULL`,
+      [tenantId]
     );
     return rows[0] ?? null;
   }
