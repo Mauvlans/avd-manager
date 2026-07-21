@@ -2,9 +2,40 @@ import { useEffect, useState } from "react";
 import { createTenant, getGraphConsentUrl, getDeployToAzureUrl, getOnboardingRegistry, SubscriptionsRegistryRow } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+
+interface DeviceCodeSession {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  message: string;
+}
+
+type PollOutcome =
+  | { status: "pending" }
+  | { status: "authorized"; accessToken: string; refreshToken?: string }
+  | { status: "expired" }
+  | { status: "denied"; error: string };
+
+interface CreatedAppRegistration {
+  appId: string;
+  objectId: string;
+  clientSecret: string;
+  servicePrincipalId: string;
+  adminConsentGranted: boolean;
+  activated: boolean;
+}
+
 /**
  * Tenant onboarding wizard, mirroring the flow implemented in
  * apps/api/src/services/onboardingService.ts + routes/onboarding.ts:
+ *   0. Platform Setup (device-code sign-in), only shown if the platform's
+ *      own Entra app registration hasn't been created yet — was a separate
+ *      /setup page, folded in here so there's a single wizard instead of
+ *      requiring the admin to visit two pages and copy/paste a client id
+ *      between them.
  *   1. Create tenant row (POST /api/onboarding/tenants)
  *   2. Get + visit Graph admin-consent URL (grant a)
  *   3. Get + visit Deploy-to-Azure Bicep RBAC template URL (grant b)
@@ -24,6 +55,92 @@ export default function Onboarding() {
   const [registryRows, setRegistryRows] = useState<SubscriptionsRegistryRow[]>([]);
   const [registryError, setRegistryError] = useState("");
   const [registryLoading, setRegistryLoading] = useState(false);
+
+  // --- Platform Setup (step 0) ---
+  const [platformConfigured, setPlatformConfigured] = useState<boolean | null>(null);
+  const [platformClientId, setPlatformClientId] = useState("");
+  const [setupSession, setSetupSession] = useState<DeviceCodeSession | null>(null);
+  const [setupStatus, setSetupStatus] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const [setupResult, setSetupResult] = useState<CreatedAppRegistration | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+
+  useEffect(() => {
+    checkPlatformStatus();
+  }, []);
+
+  async function checkPlatformStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/api/onboarding/platform-status`);
+      const data = await res.json();
+      setPlatformConfigured(data.configured);
+      setPlatformClientId(data.clientId);
+    } catch (err) {
+      // Non-fatal — the rest of the wizard still works with the placeholder
+      // client id if this check fails for some reason.
+      setPlatformConfigured(false);
+    }
+  }
+
+  async function startPlatformSetup() {
+    setSetupError("");
+    setSetupResult(null);
+    setSetupBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/setup/device-code`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "device-code request failed");
+      setSetupSession(data);
+      setSetupStatus("Waiting for you to sign in…");
+      pollDeviceCode(data.device_code, data.interval || 5);
+    } catch (err) {
+      setSetupError((err as Error).message);
+      setSetupBusy(false);
+    }
+  }
+
+  async function pollDeviceCode(deviceCode: string, intervalSeconds: number) {
+    const attempt = async (): Promise<void> => {
+      try {
+        const res = await fetch(`${API_BASE}/api/setup/device-code/poll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceCode }),
+        });
+        const outcome: PollOutcome = await res.json();
+        if (outcome.status === "pending") {
+          setTimeout(attempt, intervalSeconds * 1000);
+          return;
+        }
+        if (outcome.status === "expired") {
+          setSetupError("Device code expired — click Start again.");
+          setSetupBusy(false);
+          return;
+        }
+        if (outcome.status === "denied") {
+          setSetupError(`Sign-in denied: ${outcome.error}`);
+          setSetupBusy(false);
+          return;
+        }
+        setSetupStatus("Signed in — creating app registration…");
+        const completeRes = await fetch(`${API_BASE}/api/setup/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessToken: outcome.accessToken, displayName: "AVD Manager (dev)" }),
+        });
+        const completeData = await completeRes.json();
+        if (!completeRes.ok) throw new Error(completeData.error || "app registration creation failed");
+        setSetupResult(completeData);
+        setSetupStatus("Done — activated immediately, no restart needed.");
+        setSetupBusy(false);
+        checkPlatformStatus();
+      } catch (err) {
+        setSetupError((err as Error).message);
+        setSetupBusy(false);
+      }
+    };
+    attempt();
+  }
 
   useEffect(() => {
     if (!tenantId) return;
@@ -49,7 +166,6 @@ export default function Onboarding() {
       clearInterval(interval);
     };
   }, [tenantId]);
-
 
   async function handleCreateTenant() {
     setError("");
@@ -89,13 +205,67 @@ export default function Onboarding() {
       <h1>Tenant Onboarding</h1>
       {error && <p className="err">{error}</p>}
 
+      {platformConfigured === false && (
+        <div className="step">
+          <div className="step-num">0</div>
+          <div className="card" style={{ flex: 1 }}>
+            <h2 style={{ marginTop: 0 }}>Platform Setup (one-time, run once per environment)</h2>
+            <p>
+              AVD Manager doesn&apos;t have its own Entra app registration yet — the admin-consent link
+              below would use a placeholder client id. Sign in as a Global Admin (device-code flow, no
+              password ever touches this app) to create it automatically.
+            </p>
+            {setupError && <p className="err">{setupError}</p>}
+            <button onClick={startPlatformSetup} disabled={setupBusy}>
+              Start setup (device-code sign-in)
+            </button>
+            {setupSession && !setupResult && (
+              <div style={{ marginTop: 12 }}>
+                <p>
+                  Go to{" "}
+                  <a href={setupSession.verification_uri} target="_blank" rel="noreferrer">
+                    {setupSession.verification_uri}
+                  </a>{" "}
+                  and enter this code:
+                </p>
+                <p className="mono" style={{ fontSize: 24 }}>
+                  {setupSession.user_code}
+                </p>
+                <p>{setupStatus}</p>
+              </div>
+            )}
+            {setupResult && (
+              <div style={{ marginTop: 12 }}>
+                <p className="ok">
+                  App registration created and activated immediately — the consent link in step 2 below
+                  now uses it, no restart needed.
+                </p>
+                <p>
+                  For this to survive a restart, also set these in the API&apos;s environment:
+                </p>
+                <pre className="mono">
+                  {`ENTRA_APP_CLIENT_ID=${setupResult.appId}\nENTRA_APP_CLIENT_SECRET=${setupResult.clientSecret}`}
+                </pre>
+                <p className="warn">This client secret is shown once — copy it now if you want it persisted.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {platformConfigured === true && (
+        <p className="ok" style={{ marginBottom: 24 }}>
+          Platform is configured (client id <span className="mono">{platformClientId}</span>). Consent
+          links below use this real app registration.
+        </p>
+      )}
+
       <div className="step">
         <div className="step-num">1</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Create tenant</h2>
           <label>Display name</label>
           <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Contoso Ltd" />
-          <label>Customer's Entra (AAD) tenant GUID</label>
+          <label>Customer&apos;s Entra (AAD) tenant GUID</label>
           <input
             value={entraTenantId}
             onChange={(e) => setEntraTenantId(e.target.value)}
@@ -117,7 +287,7 @@ export default function Onboarding() {
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Graph admin consent (grant a)</h2>
           <p>
-            Send the customer's Entra admin this link. It requests the Graph application
+            Send the customer&apos;s Entra admin this link. It requests the Graph application
             permissions our multi-tenant app registration needs (read directory objects for host
             pool assignment lookups, etc.) — no Azure Lighthouse involved.
           </p>
@@ -141,7 +311,7 @@ export default function Onboarding() {
           <p>
             The customer runs this Deploy-to-Azure template in their own subscription. It creates
             a least-privilege custom RBAC role scoped to AVD host-pool/session-host management and
-            assigns it to our app's service principal — a separate grant from Graph consent above.
+            assigns it to our app&apos;s service principal — a separate grant from Graph consent above.
           </p>
           <label>Subscription ID (optional hint)</label>
           <input

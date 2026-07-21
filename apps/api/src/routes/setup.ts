@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { PlatformSetupService } from "../services/platformSetupService";
+import { setPlatformAppRegistration } from "../services/platformConfigStore";
 
 const setupService = new PlatformSetupService();
 
@@ -37,10 +38,13 @@ setupRouter.post("/device-code/poll", async (req, res) => {
 });
 
 /** Completes setup once the admin's device-code sign-in produced an access
- * token client-side. Returns the created app's client ID + secret — the
- * caller (setup wizard UI) is responsible for prompting the admin to save
- * these into the environment (ENTRA_APP_CLIENT_ID / ENTRA_APP_CLIENT_SECRET)
- * since this API process does not persist or hot-reload its own env. */
+ * token client-side. Creates the app registration and immediately activates
+ * it as this API instance's platform config (in-memory — see
+ * platformConfigStore.ts) so the onboarding wizard's consent links use the
+ * real client id right away, with no manual env var copy/paste or restart.
+ * Response still includes the client id/secret for the admin to persist
+ * into real env vars for next restart, since the in-memory store does not
+ * survive a process restart (documented gap). */
 setupRouter.post("/complete", async (req, res) => {
   const { accessToken, displayName } = req.body ?? {};
   if (!accessToken || !displayName) {
@@ -48,7 +52,8 @@ setupRouter.post("/complete", async (req, res) => {
   }
   try {
     const result = await setupService.createPlatformAppRegistration(accessToken, displayName);
-    res.json(result);
+    setPlatformAppRegistration(result.appId, result.clientSecret);
+    res.json({ ...result, activated: true });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }

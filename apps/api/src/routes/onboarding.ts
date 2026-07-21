@@ -1,31 +1,42 @@
 import { Router } from "express";
 import { OnboardingService } from "../services/onboardingService";
-
-const onboardingService = new OnboardingService(
-  process.env.ENTRA_APP_CLIENT_ID || "00000000-0000-0000-0000-000000000000",
-  process.env.GRAPH_CONSENT_REDIRECT_URI || "http://localhost:4000/api/onboarding/graph-consent/callback",
-  process.env.DEPLOY_TO_AZURE_RBAC_TEMPLATE_URL ||
-    "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Favd-manager%2Favd-manager%2Fmain%2Finfra%2Fbicep%2Frbac-delegation.json"
-);
+import { getPlatformConfig, isPlatformConfigured } from "../services/platformConfigStore";
 
 export const onboardingRouter = Router();
+
+/** Builds a fresh OnboardingService per request using the *current*
+ * platform config, instead of freezing config at module-load time — this
+ * is what lets Setup's device-code flow take effect immediately, with no
+ * API restart, once it writes a real client id/secret into
+ * platformConfigStore. */
+function getOnboardingService(): OnboardingService {
+  const config = getPlatformConfig();
+  return new OnboardingService(config.clientId, config.graphConsentRedirectUri, config.deployToAzureRbacTemplateUrl);
+}
+
+/** Tells the onboarding wizard whether Setup still needs to run, so it can
+ * show/hide its embedded Setup step accordingly instead of the admin
+ * having to know to visit a separate page first. */
+onboardingRouter.get("/platform-status", (_req, res) => {
+  res.json({ configured: isPlatformConfigured(), clientId: getPlatformConfig().clientId });
+});
 
 onboardingRouter.post("/tenants", async (req, res) => {
   const { displayName, entraTenantId } = req.body ?? {};
   if (!displayName || !entraTenantId) {
     return res.status(400).json({ error: "displayName and entraTenantId are required" });
   }
-  const tenant = await onboardingService.createTenant({ displayName, entraTenantId });
+  const tenant = await getOnboardingService().createTenant({ displayName, entraTenantId });
   res.status(201).json(tenant);
 });
 
 onboardingRouter.get("/tenants/:tenantId/graph-consent-url", (req, res) => {
-  res.json({ url: onboardingService.getAdminConsentUrl(req.params.tenantId) });
+  res.json({ url: getOnboardingService().getAdminConsentUrl(req.params.tenantId) });
 });
 
 onboardingRouter.get("/tenants/:tenantId/deploy-to-azure-url", (req, res) => {
   const subscriptionId = typeof req.query.subscriptionId === "string" ? req.query.subscriptionId : undefined;
-  res.json({ url: onboardingService.getDeployToAzureUrl(req.params.tenantId, subscriptionId) });
+  res.json({ url: getOnboardingService().getDeployToAzureUrl(req.params.tenantId, subscriptionId) });
 });
 
 /** Callback the customer's browser (or our own redirect handler) hits after
@@ -39,7 +50,7 @@ onboardingRouter.get("/graph-consent/callback", async (req, res) => {
   if (!tenantId || !subscriptionId || !servicePrincipalId) {
     return res.status(400).json({ error: "missing tenantId/subscriptionId/servicePrincipalId" });
   }
-  await onboardingService.recordGraphConsentGranted(tenantId, subscriptionId, servicePrincipalId);
+  await getOnboardingService().recordGraphConsentGranted(tenantId, subscriptionId, servicePrincipalId);
   res.json({ status: "recorded" });
 });
 
@@ -49,7 +60,7 @@ onboardingRouter.get("/graph-consent/callback", async (req, res) => {
  * resource groups in scope. Lets the frontend poll for grant completion
  * instead of requiring the admin to manually check the audit log. */
 onboardingRouter.get("/tenants/:tenantId/registry", async (req, res) => {
-  const rows = await onboardingService.listRegistryRows(req.params.tenantId);
+  const rows = await getOnboardingService().listRegistryRows(req.params.tenantId);
   res.json(rows);
 });
 
@@ -61,6 +72,6 @@ onboardingRouter.post("/rbac-grant/callback", async (req, res) => {
   if (!tenantId || !subscriptionId || !roleDefinitionId || !Array.isArray(resourceGroups)) {
     return res.status(400).json({ error: "missing required fields" });
   }
-  await onboardingService.recordRbacGranted(tenantId, subscriptionId, roleDefinitionId, resourceGroups);
+  await getOnboardingService().recordRbacGranted(tenantId, subscriptionId, roleDefinitionId, resourceGroups);
   res.json({ status: "recorded" });
 });
