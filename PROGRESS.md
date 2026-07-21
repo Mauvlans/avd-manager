@@ -12,8 +12,21 @@ directories mirroring the `COPY` layers.
 ## Git log (verified via `git log --oneline`)
 
 ```
-<git log output pasted at commit time — see below>
+fb753c2 docs(PROGRESS.md): placeholder before final git log insert
+e08d3f9 fix(arm): startVm now polls Azure-AsyncOperation (or provisioningState fallback) until terminal state/timeout and returns real VmStartResult; autoscaleTimer records start_host failures/timeouts in audit log as scaling_actions_partially_failed instead of assuming success. 3 new unit tests (success/failed/timeout), 25/25 passing
+983b6ce feat(onboarding): add GET /api/onboarding/tenants/:id/registry status endpoint, wire onboarding wizard to poll it every 5s instead of linking to audit log
+a0d38d3 docs(PROGRESS.md): correct migrate.js path claim after re-review — entrypoint runs source db/migrate.js not a dist copy, so no bug there; re-verified tsc/jest/next build all green
+42615b5 docs: PROGRESS.md — accurate status of MVP round 2 (web app, docker-compose, auth middleware, start_host, test results, validation tiers, next steps)
+5b2dc73 feat(infra): docker-compose.yml (postgres+api+web) with Dockerfiles and migration entrypoint script. NOTE: Docker is not available in this sandbox — build/run not verified here, see PROGRESS.md.
+529bfbc feat(web): Next.js frontend — tenant onboarding wizard, host pool list/detail, scaling policy config with visible safety caps, cost dashboard, audit log. Builds cleanly with next build.
+278967b feat(api): middleware-enforced tenant auth (shared secret + DB tenant validation), implement start_host via Microsoft.Compute VM start action, add 5 new tests (22 passing total)
+8b3c0c2 feat: Bicep templates for RBAC delegation (custom role, no Lighthouse) and host pool/session host provisioning
+8ead8c1 feat: control-plane DB schema+RLS, shared types, API scaffold (ARM/Graph clients, scaling evaluator, cost estimator, onboarding service, jobs) with passing unit tests + live Retail Prices API validation
+6d381ab chore: initial repo scaffold, README with architecture decisions
 ```
+(This round's final commit, updating PROGRESS.md with this exact log
+including itself, follows after this one — see `git log --oneline` for the
+authoritative up-to-date list.)
 
 ## What's fixed this round (verified)
 
