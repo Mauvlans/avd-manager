@@ -49,3 +49,11 @@ th, td { text-align: left; padding: 8px; border-bottom: 1px solid #21262d; font-
 .overview-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; }
 .overview-card .metric { font-size: 28px; font-weight: bold; margin: 4px 0; }
 .overview-card .metric-label { color: #9198a1; font-size: 13px; }
+/* SidePanel — right-side slide-out blade (components/SidePanel.tsx), used
+   by Deploy > Template's per-template forms instead of an inline card. */
+.side-panel-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(1, 4, 9, 0.6); z-index: 100; display: flex; justify-content: flex-end; }
+.side-panel { width: 420px; max-width: 90vw; height: 100vh; background: #161b22; border-left: 1px solid #30363d; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; animation: side-panel-in 0.18s ease-out; }
+@keyframes side-panel-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.side-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid #21262d; }
+.side-panel-close { padding: 4px 10px; }
+.side-panel-body { padding: 20px; overflow-y: auto; flex: 1; }

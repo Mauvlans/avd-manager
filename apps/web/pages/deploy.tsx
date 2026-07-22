@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useRouter } from "next/router";
 import DeployLayout from "../components/DeployLayout";
+import SidePanel from "../components/SidePanel";
 import { createHostPool } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
@@ -9,13 +10,15 @@ import { useTenantId } from "../lib/useTenantId";
  * details into, we publish the rest. Per Adam's mock
  * (image attached in chat) + explicit scope decision:
  *   - Simple Personal / Shared / Remote Apps host pools: we own these
- *     end-to-end — a small form collects the few fields that actually vary
- *     (name, subscription, resource group, location, session limit for
- *     Shared), everything else (load balancer type, preferredAppGroupType,
- *     etc.) is a template-specific preset baked in here, then POSTed to
- *     our existing POST /api/host-pools -> ArmHostPoolClient.
- *     createOrUpdateHostPool, the same path the Host Pools page's manual
- *     "create" flow already uses.
+ *     end-to-end — clicking a template opens a right-side slide-out panel
+ *     (components/SidePanel.tsx, Azure-portal-blade style, per Adam's ask
+ *     for "a pop up form or a form that opens from the right") with the
+ *     few fields that actually vary (name, subscription, resource group,
+ *     location, session limit for Shared), everything else (load balancer
+ *     type, preferredAppGroupType, etc.) is a template-specific preset
+ *     baked in here, then POSTed to our existing POST /api/host-pools ->
+ *     ArmHostPoolClient.createOrUpdateHostPool, the same path the Host
+ *     Pools page's manual "create" flow already uses.
  *   - "Deploy Azure Virtual Desktop To An Application Landing Zone": this
  *     opens Microsoft's REAL Deploy-to-Azure portal experience for the
  *     github.com/Azure/avdaccelerator baseline — a CustomDeploymentBlade
@@ -185,8 +188,7 @@ export default function Deploy() {
       </div>
 
       {activeTemplate && (
-        <div className="card" style={{ marginTop: 24 }}>
-          <h2 style={{ marginTop: 0 }}>{activeTemplate.label}</h2>
+        <SidePanel open={!!activeTemplate} onClose={() => setActiveTemplate(null)} title={activeTemplate.label}>
           <p>{activeTemplate.description}</p>
           {error && <p className="err">{error}</p>}
           {success && <p className="warn">{success}</p>}
@@ -227,7 +229,7 @@ export default function Deploy() {
               Cancel
             </button>
           </div>
-        </div>
+        </SidePanel>
       )}
     </DeployLayout>
   );
