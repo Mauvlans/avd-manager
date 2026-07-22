@@ -16,16 +16,17 @@ import { useTenantId } from "../lib/useTenantId";
  *     our existing POST /api/host-pools -> ArmHostPoolClient.
  *     createOrUpdateHostPool, the same path the Host Pools page's manual
  *     "create" flow already uses.
- *   - "Deploy Azure Virtual Desktop to an application landing zone": this
- *     is NOT something we reimplement. Microsoft's own enterprise-scale
- *     landing zone guidance
- *     (learn.microsoft.com/azure/cloud-adoption-framework/scenarios/azure-virtual-desktop/enterprise-scale-landing-zone)
- *     points to the actively-maintained github.com/Azure/avdaccelerator
- *     project, which is deployed via PowerShell/Azure CLI/pipelines, NOT a
- *     one-click portal "Deploy to Azure" button (checked directly against
- *     that repo's getting-started docs — no such button exists). So this
- *     card intentionally just links out to the real GitHub docs rather
- *     than faking a one-click deploy experience that doesn't exist.
+ *   - "Deploy Azure Virtual Desktop To An Application Landing Zone": this
+ *     opens Microsoft's REAL Deploy-to-Azure portal experience for the
+ *     github.com/Azure/avdaccelerator baseline — a CustomDeploymentBlade
+ *     URL combining the accelerator's baseline ARM template
+ *     (workload/arm/deploy-baseline.json) with its own custom portal UI
+ *     definition (workload/portal-ui/portal-ui-baseline.json), both served
+ *     directly from that repo. Adam supplied this exact URL after I
+ *     incorrectly assumed (based on the docs' PowerShell/CLI-first framing)
+ *     that no one-click portal experience existed — it does, both JSON
+ *     files were confirmed reachable (200) before wiring this in. This is
+ *     the real, unmodified accelerator experience, not a reimplementation.
  */
 
 type TemplateId = "simple-personal" | "shared" | "remote-apps";
@@ -159,22 +160,26 @@ export default function Deploy() {
           className="secondary"
           style={{ alignSelf: "flex-start" }}
           onClick={() =>
-            window.open("https://github.com/Azure/avdaccelerator", "_blank", "noopener,noreferrer")
+            window.open(
+              "https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAzure%2Favdaccelerator%2Fmain%2Fworkload%2Farm%2Fdeploy-baseline.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FAzure%2Favdaccelerator%2Fmain%2Fworkload%2Fportal-ui%2Fportal-ui-baseline.json",
+              "_blank",
+              "noopener,noreferrer"
+            )
           }
         >
-          Deploy Azure Virtual Desktop to an application landing zone
+          Deploy Azure Virtual Desktop To An Application Landing Zone
         </button>
         <div className="card">
           <p style={{ margin: 0 }}>
             An enterprise-scale Azure landing zone ensures consistent governance, security, and
             operational readiness across Azure environments. Complete this foundation before
             deploying Azure Virtual Desktop to ensure security and compliance requirements are met.
-            This opens Microsoft&apos;s own{" "}
+            This opens Microsoft&apos;s real Deploy-to-Azure portal experience for the{" "}
             <a href="https://github.com/Azure/avdaccelerator" target="_blank" rel="noreferrer">
               Azure Virtual Desktop accelerator
             </a>{" "}
-            on GitHub — deployed via PowerShell/Azure CLI/pipeline, not a one-click portal template,
-            so we link to it rather than reimplement it.
+            (baseline ARM template + custom portal UI definition, both served directly from that
+            repo) — not a reimplementation, the real thing.
           </p>
         </div>
       </div>
