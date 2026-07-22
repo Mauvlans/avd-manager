@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { PlatformSetupService } from "../services/platformSetupService";
-import { setPlatformAppRegistration, getPlatformConfig } from "../services/platformConfigStore";
+import { setPlatformAppRegistration, getPlatformConfig, resetPlatformAppRegistration } from "../services/platformConfigStore";
 
 const setupService = new PlatformSetupService();
 
@@ -58,4 +58,16 @@ setupRouter.post("/complete", async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }
+});
+
+/** Resets the platform config back to the placeholder, so Setup's step 0
+ * shows up again in the onboarding wizard (e.g. if the previously-created
+ * app registration turns out to be broken/misconfigured and needs
+ * recreating, as happened once already — see resetPlatformAppRegistration's
+ * own docstring). Deliberately not tenant-scoped and has no side effects
+ * beyond this in-memory config — does NOT delete the actual Entra app
+ * registration itself, just stops this API instance from using it. */
+setupRouter.post("/reset", (_req, res) => {
+  resetPlatformAppRegistration();
+  res.json({ status: "reset" });
 });

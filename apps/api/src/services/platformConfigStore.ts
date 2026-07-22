@@ -45,6 +45,21 @@ export function setPlatformAppRegistration(clientId: string, clientSecret: strin
   current = { ...current, clientId, clientSecret };
 }
 
+/** Resets the platform config back to the all-zeros placeholder, so Setup's
+ * step 0 shows up again in the onboarding wizard. Needed the first time
+ * this was built: a broken app registration (missing redirect URI, fixed
+ * in a later commit) got activated via /complete, and there was no way to
+ * make step 0 reappear to create a corrected one short of restarting the
+ * whole API process and losing ALL in-memory state, not just this one bad
+ * app registration. */
+export function resetPlatformAppRegistration(): void {
+  current = {
+    ...current,
+    clientId: "00000000-0000-0000-0000-000000000000",
+    clientSecret: null,
+  };
+}
+
 /** True once a real app registration (not the all-zeros placeholder) is
  * configured — lets the onboarding wizard tell the admin whether Setup
  * still needs to run. */
