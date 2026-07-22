@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getGraphConsentUrl, getDeployToAzureUrl, getOnboardingRegistry, SubscriptionsRegistryRow } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
+import SettingsLayout from "../components/SettingsLayout";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
@@ -248,8 +249,7 @@ export default function Onboarding() {
   }
 
   return (
-    <div>
-      <h1>Tenant Onboarding</h1>
+    <SettingsLayout>
       {error && <p className="err">{error}</p>}
 
       {platformConfigured === false && (
@@ -448,6 +448,6 @@ export default function Onboarding() {
           <p>Once both grants show as granted in the audit log, proceed to <a href="/host-pools">Host Pools</a> to provision your first host pool.</p>
         </div>
       </div>
-    </div>
+    </SettingsLayout>
   );
 }
