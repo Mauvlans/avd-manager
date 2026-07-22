@@ -87,7 +87,11 @@ describe("PlatformSetupService (mocked Graph/AAD HTTP)", () => {
     }) as unknown as FetchLike;
 
     const service = new PlatformSetupService(mockFetch);
-    const result = await service.createPlatformAppRegistration("admin-access-token", "AVD Manager (dev)");
+    const result = await service.createPlatformAppRegistration(
+      "admin-access-token",
+      "AVD Manager (dev)",
+      "http://localhost:4001/api/onboarding/graph-consent/callback"
+    );
 
     expect(result).toEqual({
       appId: "app-1",
@@ -96,6 +100,15 @@ describe("PlatformSetupService (mocked Graph/AAD HTTP)", () => {
       servicePrincipalId: "sp-1",
       adminConsentGranted: true,
     });
+
+    // Verify the redirect URI was registered on the app at creation time —
+    // without this, real admin-consent sign-ins fail with AADSTS500113
+    // ("No reply address is registered for the application").
+    const createAppCall = (mockFetch as jest.Mock).mock.calls.find(
+      ([url]: [string]) => url === "https://graph.microsoft.com/v1.0/applications"
+    );
+    const createAppBody = JSON.parse(createAppCall[1].body);
+    expect(createAppBody.web.redirectUris).toEqual(["http://localhost:4001/api/onboarding/graph-consent/callback"]);
 
     // Verify the app-role grants were resourced against Graph's SP, not our own
     const grantCalls = (mockFetch as jest.Mock).mock.calls.filter(([url]: [string]) =>
@@ -120,7 +133,11 @@ describe("PlatformSetupService (mocked Graph/AAD HTTP)", () => {
     }) as unknown as FetchLike;
 
     const service = new PlatformSetupService(mockFetch);
-    const result = await service.createPlatformAppRegistration("admin-access-token", "AVD Manager (dev)");
+    const result = await service.createPlatformAppRegistration(
+      "admin-access-token",
+      "AVD Manager (dev)",
+      "http://localhost:4001/api/onboarding/graph-consent/callback"
+    );
     expect(result.adminConsentGranted).toBe(false);
   });
 });

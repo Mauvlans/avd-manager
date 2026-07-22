@@ -124,17 +124,33 @@ export class PlatformSetupService {
    * required Graph application-permission app roles + tenant-wide admin
    * consent — all via Graph calls authenticated with the admin's own
    * device-code-issued token (so Graph enforces the admin's real
-   * privileges; we never elevate anything ourselves). */
-  async createPlatformAppRegistration(accessToken: string, displayName: string): Promise<CreatedAppRegistration> {
+   * privileges; we never elevate anything ourselves).
+   *
+   * `graphConsentRedirectUri` MUST be registered on the app at creation
+   * time — an app with no registered Web redirect URI fails every
+   * customer's actual admin-consent sign-in with AADSTS500113 ("No reply
+   * address is registered for the application"), even though app
+   * creation itself succeeds. This was missed in the first version of this
+   * method (caught live against a real tenant, not by the mocked unit
+   * tests — they never exercise a real AAD authorize/consent redirect). */
+  async createPlatformAppRegistration(
+    accessToken: string,
+    displayName: string,
+    graphConsentRedirectUri: string
+  ): Promise<CreatedAppRegistration> {
     const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
 
-    // 1. App registration (multitenant)
+    // 1. App registration (multitenant), with the Web redirect URI our
+    // onboarding flow's admin-consent callback uses registered up front.
     const appRes = await this.fetchImpl("https://graph.microsoft.com/v1.0/applications", {
       method: "POST",
       headers,
       body: JSON.stringify({
         displayName,
         signInAudience: "AzureADMultipleOrgs",
+        web: {
+          redirectUris: [graphConsentRedirectUri],
+        },
         requiredResourceAccess: [
           {
             resourceAppId: GRAPH_RESOURCE_APP_ID,

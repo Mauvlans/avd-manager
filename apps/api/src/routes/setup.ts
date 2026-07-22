@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { PlatformSetupService } from "../services/platformSetupService";
-import { setPlatformAppRegistration } from "../services/platformConfigStore";
+import { setPlatformAppRegistration, getPlatformConfig } from "../services/platformConfigStore";
 
 const setupService = new PlatformSetupService();
 
@@ -51,9 +51,10 @@ setupRouter.post("/complete", async (req, res) => {
     return res.status(400).json({ error: "accessToken and displayName are required" });
   }
   try {
-    const result = await setupService.createPlatformAppRegistration(accessToken, displayName);
+    const redirectUri = getPlatformConfig().graphConsentRedirectUri;
+    const result = await setupService.createPlatformAppRegistration(accessToken, displayName, redirectUri);
     setPlatformAppRegistration(result.appId, result.clientSecret);
-    res.json({ ...result, activated: true });
+    res.json({ ...result, activated: true, redirectUriRegistered: redirectUri });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }
