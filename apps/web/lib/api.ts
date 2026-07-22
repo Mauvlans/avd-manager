@@ -296,6 +296,31 @@ export function getCostEstimate(armSkuName: string, armRegionName: string, hostC
   });
 }
 
+// --- Service Variables (apps/api/src/routes/serviceVariables.ts) ---
+
+export interface ServiceVariableOption {
+  value: string;
+  label: string;
+}
+
+export interface ServiceVariableRow {
+  key: string;
+  options: ServiceVariableOption[];
+  selectedValues: string[];
+}
+
+export function listServiceVariables(tenantId: string) {
+  return request<ServiceVariableRow[]>("/api/service-variables", { tenantId });
+}
+
+export function updateServiceVariable(tenantId: string, key: string, selectedValues: string[]) {
+  return request<{ key: string; selectedValues: string[] }>(`/api/service-variables/${encodeURIComponent(key)}`, {
+    tenantId,
+    method: "PUT",
+    body: { selectedValues },
+  });
+}
+
 // --- Audit log (apps/api/src/routes/auditLog.ts) ---
 
 export interface AuditLogRow {

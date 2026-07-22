@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import DeployLayout from "../components/DeployLayout";
 import SidePanel from "../components/SidePanel";
-import { createHostPool, getOnboardingRegistry, listHostPools } from "../lib/api";
+import { createHostPool, getOnboardingRegistry, listHostPools, listServiceVariables } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
 /**
@@ -96,6 +96,7 @@ export default function Deploy() {
   const [name, setName] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
   const [knownSubscriptionIds, setKnownSubscriptionIds] = useState<string[]>([]);
+  const [availableRegions, setAvailableRegions] = useState<{ value: string; label: string }[]>([]);
   const [resourceGroup, setResourceGroup] = useState("");
   const [location, setLocation] = useState("eastus");
   const [maxSessionLimit, setMaxSessionLimit] = useState(10);
@@ -134,12 +135,30 @@ export default function Deploy() {
     });
   }, [tenantId]);
 
+  // Location dropdown is sourced from Settings > Service Variables'
+  // "regions" selection, per Adam's request — an admin narrows down the
+  // full Azure region catalog once, and every deployment form (starting
+  // with this one) only offers the regions they've allowed.
+  useEffect(() => {
+    if (!tenantId) return;
+    listServiceVariables(tenantId)
+      .then((vars) => {
+        const regions = vars.find((v) => v.key === "regions");
+        if (!regions) return;
+        const allowed = regions.options.filter((o) => regions.selectedValues.includes(o.value));
+        setAvailableRegions(allowed);
+      })
+      .catch(() => {
+        /* non-fatal — falls back to the free-text location input below */
+      });
+  }, [tenantId]);
+
   function openTemplate(t: TemplateDefinition) {
     setActiveTemplate(t);
     setName("");
     setSubscriptionId(knownSubscriptionIds[0] ?? "");
     setResourceGroup("");
-    setLocation("eastus");
+    setLocation(availableRegions[0]?.value ?? "eastus");
     setMaxSessionLimit(t.preset.defaultMaxSessionLimit);
     setError("");
     setSuccess("");
@@ -256,7 +275,17 @@ export default function Deploy() {
           <input value={resourceGroup} onChange={(e) => setResourceGroup(e.target.value)} placeholder="rg-avd-prod" />
 
           <label>Location</label>
-          <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="eastus" />
+          {availableRegions.length > 0 ? (
+            <select value={location} onChange={(e) => setLocation(e.target.value)}>
+              {availableRegions.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="eastus" />
+          )}
 
           {activeTemplate.preset.showMaxSessionLimit && (
             <>

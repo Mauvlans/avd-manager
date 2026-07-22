@@ -15,6 +15,7 @@ import Link from "next/link";
 const SETTINGS_TABS = [
   { href: "/settings", label: "General" },
   { href: "/onboarding", label: "Onboarding" },
+  { href: "/settings/service-variables", label: "Service Variables" },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
