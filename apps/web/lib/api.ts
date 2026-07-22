@@ -60,9 +60,10 @@ export function getGraphConsentUrl(nonce: string) {
 }
 
 export function getDeployToAzureUrl(tenantId: string, subscriptionId?: string) {
-  return request<{ url: string }>(`/api/onboarding/tenants/${tenantId}/deploy-to-azure-url`, {
-    query: { subscriptionId },
-  });
+  return request<{ url: string; avdManagerServicePrincipalObjectId: string | null }>(
+    `/api/onboarding/tenants/${tenantId}/deploy-to-azure-url`,
+    { query: { subscriptionId } }
+  );
 }
 
 export interface SubscriptionsRegistryRow {

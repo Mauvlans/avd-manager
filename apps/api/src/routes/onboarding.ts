@@ -39,8 +39,8 @@ onboardingRouter.get("/graph-consent-url", (req, res) => {
 
 onboardingRouter.get("/tenants/:tenantId/deploy-to-azure-url", async (req, res) => {
   const subscriptionId = typeof req.query.subscriptionId === "string" ? req.query.subscriptionId : undefined;
-  const url = await getOnboardingService().getDeployToAzureUrl(req.params.tenantId, subscriptionId);
-  res.json({ url });
+  const result = await getOnboardingService().getDeployToAzureUrl(req.params.tenantId, subscriptionId);
+  res.json(result);
 });
 
 /** Callback the customer's browser hits after admin consent completes.

@@ -45,42 +45,37 @@ export class OnboardingService {
     });
   }
 
-  /** Returns the Deploy-to-Azure URL for the RBAC Bicep template (grant b).
-   * The customer runs this in their own subscription; it deploys the custom
-   * least-privilege role + assignment. See infra/bicep/rbac-delegation.bicep.
+  /** Returns the Deploy-to-Azure URL for the RBAC Bicep template (grant b),
+   * plus the service principal object id the admin needs to manually paste
+   * into the deployment's parameter field.
    *
-   * Auto-fills avdManagerServicePrincipalObjectId and tenantCallbackState so
-   * Azure's Custom Deployment blade pre-populates those fields instead of
-   * leaving the admin to find/paste the service principal object id
-   * themselves (we already know it — it came back on the Graph-consent
-   * redirect and is stored on the pending subscriptions_registry row).
-   *
-   * IMPORTANT (caught live — this did NOT work in an earlier version):
-   * portal.azure.com is a hash-routed single-page app. Its own router only
-   * reads query parameters that appear AFTER the `#` (inside the
-   * `#create/Microsoft.Template/uri/...` fragment), not ordinary query
-   * parameters attached before the `#` — `URL.searchParams.set()` on this
-   * template URL attaches them BEFORE the `#` (since the base template URL
-   * has no `?` of its own), which the portal's client-side router never
-   * sees or parses. Adam confirmed the field stayed empty every time
-   * despite the URL containing the right value. Fixed by appending the
-   * parameters onto the fragment string itself instead of via
-   * URL.searchParams. */
-  async getDeployToAzureUrl(tenantId: string, subscriptionIdHint?: string): Promise<string> {
-    const [baseUrl, fragment] = this.deployToAzureTemplateUrl.split("#");
-    const fragmentParams = new URLSearchParams();
-    fragmentParams.set("tenantCallbackState", tenantId);
-    if (subscriptionIdHint) fragmentParams.set("subscriptionId", subscriptionIdHint);
+   * IMPORTANT — auto-fill via URL was attempted and abandoned after two
+   * live failures: portal.azure.com's Custom Deployment blade has NO
+   * documented mechanism for pre-filling arbitrary parameter values via
+   * the deploy-button URL. Microsoft's own docs
+   * (learn.microsoft.com/azure/azure-resource-manager/templates/deploy-to-azure-button)
+   * state only "default values from the template" pre-fill — nothing about
+   * URL query params or fragment params setting parameter values. An
+   * earlier version of this method tried appending
+   * avdManagerServicePrincipalObjectId as both a plain query param and a
+   * fragment param; neither worked when Adam tested it live against the
+   * real portal, which matches the docs once actually checked instead of
+   * assumed. Rather than keep guessing at undocumented behavior, this
+   * returns the SP id separately so the frontend can display it for a
+   * manual copy-paste — a small manual step, but a correct and honest
+   * one instead of a UI that silently fails to do what it claims. */
+  async getDeployToAzureUrl(
+    tenantId: string,
+    subscriptionIdHint?: string
+  ): Promise<{ url: string; avdManagerServicePrincipalObjectId: string | null }> {
+    const url = new URL(this.deployToAzureTemplateUrl);
 
     const servicePrincipalId = await withTenant(tenantId, async (client) => {
       const row = await this.getPendingRegistryRow(client, tenantId);
       return row?.graph_consent_service_principal_id ?? null;
     });
-    if (servicePrincipalId) {
-      fragmentParams.set("avdManagerServicePrincipalObjectId", servicePrincipalId);
-    }
 
-    return `${baseUrl}#${fragment}?${fragmentParams.toString()}`;
+    return { url: url.toString(), avdManagerServicePrincipalObjectId: servicePrincipalId };
   }
 
   /** Callback invoked after the customer's admin completes Graph consent.

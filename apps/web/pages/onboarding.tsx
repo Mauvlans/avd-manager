@@ -49,6 +49,7 @@ export default function Onboarding() {
   const [subscriptionId, setSubscriptionId] = useState("");
   const [consentUrl, setConsentUrl] = useState("");
   const [deployUrl, setDeployUrl] = useState("");
+  const [deploySpObjectId, setDeploySpObjectId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [registryRows, setRegistryRows] = useState<SubscriptionsRegistryRow[]>([]);
   const [registryError, setRegistryError] = useState("");
@@ -202,8 +203,12 @@ export default function Onboarding() {
   async function handleGetDeployUrl() {
     setError("");
     try {
-      const { url } = await getDeployToAzureUrl(tenantId, subscriptionId || undefined);
+      const { url, avdManagerServicePrincipalObjectId } = await getDeployToAzureUrl(
+        tenantId,
+        subscriptionId || undefined
+      );
       setDeployUrl(url);
+      setDeploySpObjectId(avdManagerServicePrincipalObjectId);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -330,11 +335,39 @@ export default function Onboarding() {
             Generate Deploy-to-Azure link
           </button>
           {deployUrl && (
-            <p className="mono" style={{ marginTop: 12 }}>
-              <a href={deployUrl} target="_blank" rel="noreferrer">
-                {deployUrl}
-              </a>
-            </p>
+            <>
+              <p className="mono" style={{ marginTop: 12 }}>
+                <a href={deployUrl} target="_blank" rel="noreferrer">
+                  {deployUrl}
+                </a>
+              </p>
+              {deploySpObjectId ? (
+                <div style={{ marginTop: 12, padding: 8, border: "1px solid #444", borderRadius: 4 }}>
+                  <p style={{ marginTop: 0 }}>
+                    Azure has no way to pre-fill this from the link above — the customer&apos;s admin
+                    must paste it manually into the &quot;Avd Manager Service Principal Object Id&quot;
+                    field on the deployment page that opens:
+                  </p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <code className="mono" style={{ flex: 1 }}>
+                      {deploySpObjectId}
+                    </code>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => navigator.clipboard.writeText(deploySpObjectId)}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="warn" style={{ marginTop: 12 }}>
+                  No service principal id available yet — make sure step 1 (Graph consent) completed
+                  first.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>
