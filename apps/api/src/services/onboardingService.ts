@@ -45,11 +45,29 @@ export class OnboardingService {
 
   /** Returns the Deploy-to-Azure URL for the RBAC Bicep template (grant b).
    * The customer runs this in their own subscription; it deploys the custom
-   * least-privilege role + assignment. See infra/bicep/rbac-delegation.bicep. */
-  getDeployToAzureUrl(tenantId: string, subscriptionIdHint?: string): string {
+   * least-privilege role + assignment. See infra/bicep/rbac-delegation.bicep.
+   *
+   * Auto-fills avdManagerServicePrincipalObjectId and tenantCallbackState as
+   * portal query-string params so Azure's Custom Deployment blade
+   * pre-populates those fields instead of leaving the admin to find/paste
+   * the service principal object id themselves (we already know it — it
+   * came back on the Graph-consent redirect and is stored on the pending
+   * subscriptions_registry row). Azure's portal reads any query param whose
+   * name matches a template parameter name and pre-fills that field; params
+   * that don't match a template parameter (subscriptionId) are used by
+   * Azure's own blade UI (subscription picker), not passed to the template. */
+  async getDeployToAzureUrl(tenantId: string, subscriptionIdHint?: string): Promise<string> {
     const url = new URL(this.deployToAzureTemplateUrl);
     url.searchParams.set("tenantCallbackState", tenantId);
     if (subscriptionIdHint) url.searchParams.set("subscriptionId", subscriptionIdHint);
+
+    const servicePrincipalId = await withTenant(tenantId, async (client) => {
+      const row = await this.getPendingRegistryRow(client, tenantId);
+      return row?.graph_consent_service_principal_id ?? null;
+    });
+    if (servicePrincipalId) {
+      url.searchParams.set("avdManagerServicePrincipalObjectId", servicePrincipalId);
+    }
     return url.toString();
   }
 
