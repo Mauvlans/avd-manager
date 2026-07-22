@@ -63,7 +63,20 @@ export class OnboardingService {
    * assumed. Rather than keep guessing at undocumented behavior, this
    * returns the SP id separately so the frontend can display it for a
    * manual copy-paste — a small manual step, but a correct and honest
-   * one instead of a UI that silently fails to do what it claims. */
+   * one instead of a UI that silently fails to do what it claims.
+   *
+   * ANOTHER real bug caught live: this used to only look at the "pending"
+   * (subscription_id IS NULL) registry row for the SP id. That row only
+   * exists in the narrow window between Graph consent completing and RBAC
+   * being granted — once RBAC succeeds, recordRbacGranted fills in
+   * subscription_id on that same row, so there IS no more pending row,
+   * and re-generating the Deploy-to-Azure link afterward (e.g. to
+   * re-deploy after a role-definition update, which is exactly what
+   * happened) found nothing and showed "no service principal id
+   * available" even though the tenant's real SP id was sitting right
+   * there on the now-fully-populated row. Fixed to fall back to ANY
+   * registry row for the tenant with a non-null SP id if there's no
+   * pending row, ordered by most recently granted first. */
   async getDeployToAzureUrl(
     tenantId: string,
     subscriptionIdHint?: string
@@ -71,8 +84,17 @@ export class OnboardingService {
     const url = new URL(this.deployToAzureTemplateUrl);
 
     const servicePrincipalId = await withTenant(tenantId, async (client) => {
-      const row = await this.getPendingRegistryRow(client, tenantId);
-      return row?.graph_consent_service_principal_id ?? null;
+      const pending = await this.getPendingRegistryRow(client, tenantId);
+      if (pending?.graph_consent_service_principal_id) {
+        return pending.graph_consent_service_principal_id;
+      }
+      const { rows } = await client.query(
+        `SELECT graph_consent_service_principal_id FROM subscriptions_registry
+         WHERE tenant_id = $1 AND graph_consent_service_principal_id IS NOT NULL
+         ORDER BY graph_consent_granted_at DESC NULLS LAST LIMIT 1`,
+        [tenantId]
+      );
+      return rows[0]?.graph_consent_service_principal_id ?? null;
     });
 
     return { url: url.toString(), avdManagerServicePrincipalObjectId: servicePrincipalId };
