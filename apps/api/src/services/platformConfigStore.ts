@@ -34,7 +34,7 @@ let current: PlatformConfig = {
     `http://localhost:${process.env.PORT ?? 4000}/api/onboarding/graph-consent/callback`,
   deployToAzureRbacTemplateUrl:
     process.env.DEPLOY_TO_AZURE_RBAC_TEMPLATE_URL ||
-    "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Favd-manager%2Favd-manager%2Fmain%2Finfra%2Fbicep%2Frbac-delegation.json",
+    "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FMauvlans%2Favd-manager%2Fmain%2Finfra%2Fbicep%2Frbac-delegation.json",
 };
 
 export function getPlatformConfig(): PlatformConfig {
