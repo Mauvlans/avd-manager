@@ -272,36 +272,41 @@ export default function Onboarding() {
         <div className="step-num">1</div>
         <div className="card" style={{ flex: 1 }}>
           <h2 style={{ marginTop: 0 }}>Graph admin consent (grant a)</h2>
-          <p>
-            Send the customer&apos;s Entra admin this link. It requests the Graph application
-            permissions our multi-tenant app registration needs (read directory objects for host
-            pool assignment lookups, etc.) — no Azure Lighthouse involved.
-          </p>
-          <p>
-            No need to type in the customer&apos;s tenant GUID or a display name — Microsoft&apos;s own
-            consent redirect tells us who just granted consent, and the tenant record is created
-            automatically from that.
-          </p>
-          <button className="secondary" onClick={handleGetConsentUrl}>
-            Generate admin-consent link
-          </button>
-          {consentUrl && (
-            <p className="mono" style={{ marginTop: 12 }}>
-              <a href={consentUrl} target="_blank" rel="noreferrer">
-                {consentUrl}
-              </a>
-            </p>
-          )}
-          {tenantId && (
-            <p style={{ marginTop: 12 }} className="ok">
+          {tenantId ? (
+            <p className="ok">
               Consent recorded — tenant <span className="mono">{tenantId}</span> created automatically.
+              Move on to step 2 below.
             </p>
-          )}
-          {!tenantId && consentUrl && (
-            <p className="warn" style={{ marginTop: 12 }}>
-              Open the link above in a new tab and complete sign-in — that tab will redirect back here
-              once consent is recorded.
-            </p>
+          ) : (
+            <>
+              <p>
+                Send the customer&apos;s Entra admin this link. It requests the Graph application
+                permissions our multi-tenant app registration needs (read directory objects for host
+                pool assignment lookups, etc.) — no Azure Lighthouse involved.
+              </p>
+              <p>
+                No need to type in the customer&apos;s tenant GUID or a display name — Microsoft&apos;s own
+                consent redirect tells us who just granted consent, and the tenant record is created
+                automatically from that.
+              </p>
+              <button className="secondary" onClick={handleGetConsentUrl}>
+                Generate admin-consent link
+              </button>
+              {consentUrl && (
+                <>
+                  <p className="mono" style={{ marginTop: 12 }}>
+                    <a href={consentUrl} target="_blank" rel="noreferrer">
+                      {consentUrl}
+                    </a>
+                  </p>
+                  <p className="warn" style={{ marginTop: 12 }}>
+                    Open the link above in a new tab and complete sign-in — that tab will redirect back
+                    here once consent is recorded (this card updates automatically, no need to click
+                    anything else here).
+                  </p>
+                </>
+              )}
+            </>
           )}
         </div>
       </div>
