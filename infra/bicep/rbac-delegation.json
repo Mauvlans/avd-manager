@@ -1,0 +1,93 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "hand-transpiled from infra/bicep/rbac-delegation.bicep (no bicep CLI available in the build sandbox — kept functionally identical, see that file for authoritative source and comments)"
+    }
+  },
+  "parameters": {
+    "avdManagerServicePrincipalObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the service principal for the AVD Manager multi-tenant app registration in this tenant (created by the Graph admin-consent step)."
+      }
+    },
+    "roleNameSuffix": {
+      "type": "string",
+      "defaultValue": "[uniqueString(subscription().id)]",
+      "metadata": {
+        "description": "A short, unique suffix to avoid role definition name collisions across repeated deployments."
+      }
+    },
+    "tenantCallbackState": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Correlation id / tenant id passed back to our callback so we can record the grant in subscriptions_registry."
+      }
+    }
+  },
+  "variables": {
+    "roleName": "[format('AVD Manager - Least Privilege ({0})', parameters('roleNameSuffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, variables('roleName'))]",
+      "properties": {
+        "roleName": "[variables('roleName')]",
+        "description": "Least-privilege role for AVD Manager SaaS: host pool + session host VM lifecycle management only. Never Owner/Contributor.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.DesktopVirtualization/*",
+              "Microsoft.Compute/virtualMachines/*",
+              "Microsoft.Compute/virtualMachines/instanceView/read",
+              "Microsoft.Resources/subscriptions/resourceGroups/read"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[subscription().id]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, parameters('avdManagerServicePrincipalObjectId'), resourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, variables('roleName'))))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, variables('roleName')))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, variables('roleName')))]",
+        "principalId": "[parameters('avdManagerServicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ],
+  "outputs": {
+    "roleDefinitionId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, variables('roleName')))]"
+    },
+    "roleAssignmentId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Authorization/roleAssignments', guid(subscription().id, parameters('avdManagerServicePrincipalObjectId'), resourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, variables('roleName')))))]"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "tenantCallbackState": {
+      "type": "string",
+      "value": "[parameters('tenantCallbackState')]"
+    }
+  }
+}
