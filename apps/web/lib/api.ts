@@ -170,52 +170,118 @@ export function deallocateSessionHost(tenantId: string, hostPoolId: string, sess
   );
 }
 
-// --- Scaling policies (apps/api/src/routes/scalingPolicies.ts) ---
+// --- Scaling plans (apps/api/src/routes/scalingPlans.ts) — thin wrappers
+// over native Azure AVD Scaling Plans (Microsoft.DesktopVirtualization/
+// scalingPlans). There is no local DB table backing these; ARM is the
+// sole source of truth, matching the API's design (see scalingPlans.ts's
+// header comment for why the custom scaling-policy engine was retired). ---
 
-export interface ScalingPolicyRow {
-  id: string;
-  tenant_id: string;
-  host_pool_id: string;
+export interface ScalingPlanScheduleInput {
   name: string;
-  mode: "schedule" | "dynamic_threshold";
-  enabled: boolean;
-  schedule_config: unknown;
-  dynamic_config: unknown;
-  max_hosts_per_action: number;
-  max_cost_delta_per_action_usd_per_hour: string;
-  created_at: string;
-  updated_at: string;
+  daysOfWeek: string[];
+  rampUpStartTime: { hour: number; minute: number };
+  rampUpLoadBalancingAlgorithm: "BreadthFirst" | "DepthFirst";
+  rampUpMinimumHostsPct: number;
+  rampUpCapacityThresholdPct: number;
+  peakStartTime: { hour: number; minute: number };
+  peakLoadBalancingAlgorithm: "BreadthFirst" | "DepthFirst";
+  rampDownStartTime: { hour: number; minute: number };
+  rampDownLoadBalancingAlgorithm: "BreadthFirst" | "DepthFirst";
+  rampDownMinimumHostsPct: number;
+  rampDownCapacityThresholdPct: number;
+  rampDownForceLogoffUsers: boolean;
+  rampDownWaitTimeMinutes: number;
+  rampDownNotificationMessage?: string;
+  rampDownStopHostsWhen: "ZeroSessions" | "ZeroActiveSessions";
+  offPeakStartTime: { hour: number; minute: number };
+  offPeakLoadBalancingAlgorithm: "BreadthFirst" | "DepthFirst";
 }
 
-export function listScalingPolicies(tenantId: string, hostPoolId?: string) {
-  return request<ScalingPolicyRow[]>("/api/scaling-policies", { tenantId, query: { hostPoolId } });
+export interface ScalingPlanHostPoolReference {
+  hostPoolArmPath: string;
+  scalingPlanEnabled: boolean;
 }
 
-export function createScalingPolicy(
-  tenantId: string,
-  input: {
-    hostPoolId: string;
-    name: string;
-    mode: "schedule" | "dynamic_threshold";
-    enabled?: boolean;
-    scheduleConfig?: unknown;
-    dynamicConfig?: unknown;
-    maxHostsPerAction: number;
-    maxCostDeltaPerActionUsdPerHour: number;
-  }
-) {
-  return request<ScalingPolicyRow>("/api/scaling-policies", { tenantId, method: "POST", body: input });
+export interface ScalingPlanRow {
+  id: string;
+  name: string;
+  location: string;
+  friendlyName?: string;
+  description?: string;
+  timeZone: string;
+  exclusionTag?: string;
+  hostPoolType: "Pooled" | "Personal";
+  schedules: ScalingPlanScheduleInput[];
+  hostPoolReferences: ScalingPlanHostPoolReference[];
 }
 
-export function setScalingPolicyEnabled(tenantId: string, id: string, enabled: boolean) {
-  return request<ScalingPolicyRow>(`/api/scaling-policies/${id}`, {
+export function listScalingPlans(tenantId: string, subscriptionId: string, resourceGroup: string) {
+  return request<ScalingPlanRow[]>("/api/scaling-plans", { tenantId, query: { subscriptionId, resourceGroup } });
+}
+
+export function getScalingPlan(tenantId: string, subscriptionId: string, resourceGroup: string, name: string) {
+  return request<ScalingPlanRow>(`/api/scaling-plans/${encodeURIComponent(name)}`, {
     tenantId,
-    method: "PATCH",
-    body: { enabled },
+    query: { subscriptionId, resourceGroup },
   });
 }
 
-// --- Cost estimation (apps/api/src/routes/scalingPolicies.ts costRouter, public retail prices) ---
+export function createOrUpdateScalingPlan(
+  tenantId: string,
+  name: string,
+  input: {
+    subscriptionId: string;
+    resourceGroup: string;
+    location: string;
+    friendlyName?: string;
+    description?: string;
+    timeZone: string;
+    exclusionTag?: string;
+    hostPoolType: "Pooled" | "Personal";
+    schedules: ScalingPlanScheduleInput[];
+    hostPoolReferences: ScalingPlanHostPoolReference[];
+  }
+) {
+  return request<ScalingPlanRow>(`/api/scaling-plans/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "PUT",
+    body: input,
+  });
+}
+
+export function deleteScalingPlan(tenantId: string, name: string, subscriptionId: string, resourceGroup: string) {
+  return request<void>(`/api/scaling-plans/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "DELETE",
+    query: { subscriptionId, resourceGroup },
+  });
+}
+
+export function attachScalingPlanToHostPool(
+  tenantId: string,
+  name: string,
+  input: { subscriptionId: string; resourceGroup: string; hostPoolArmPath: string; scalingPlanEnabled?: boolean }
+) {
+  return request<ScalingPlanRow>(`/api/scaling-plans/${encodeURIComponent(name)}/attach`, {
+    tenantId,
+    method: "POST",
+    body: input,
+  });
+}
+
+export function detachScalingPlanFromHostPool(
+  tenantId: string,
+  name: string,
+  input: { subscriptionId: string; resourceGroup: string; hostPoolArmPath: string }
+) {
+  return request<ScalingPlanRow>(`/api/scaling-plans/${encodeURIComponent(name)}/detach`, {
+    tenantId,
+    method: "POST",
+    body: input,
+  });
+}
+
+// --- Cost estimation (apps/api/src/routes/cost.ts, public retail prices) ---
 
 export interface CostEstimateResponse {
   price: { retailPrice: number; currencyCode: string; armSkuName: string; armRegionName: string };

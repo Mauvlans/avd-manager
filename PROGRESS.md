@@ -70,3 +70,34 @@ This is the core product thesis validated: a multi-tenant SaaS control plane CAN
 - Multi-tenancy: single control-plane Postgres DB with Row-Level Security, not DB-per-tenant.
 - Hard safety caps (max hosts per action, max cost delta) enforced server-side in `ScalingPolicyEvaluator`.
 - The custom RBAC role is genuinely least-privilege — confirmed by pulling the real deployed role definition JSON from Azure and checking its `actions` list directly, not just trusting the Bicep source.
+
+## Retired the custom scaling engine — native AVD Scaling Plans only
+
+Adam's explicit decision: don't build a competing autoscaling/cost-optimization
+engine when Azure already ships native AVD Scaling Plans
+(`Microsoft.DesktopVirtualization/scalingPlans`) for free. Retired the custom
+engine entirely rather than keeping both:
+
+- Deleted: `scalingPolicyEvaluator.ts` (+ test), `autoscaleTimer.ts`,
+  `scalingActionRetryWorker.ts` (+ test), `routes/scalingPolicies.ts`.
+- Cost estimation (which shared a file with the retired scaling-policy
+  routes) survived, split out into its own `routes/cost.ts`.
+- Added `services/armScalingPlanClient.ts` — thin ARM REST wrapper over
+  native scalingPlans (list/get/createOrUpdate/delete, plus attach/detach
+  which is a read-modify-write over the plan's `hostPoolReferences` array,
+  since ARM has no separate attach/detach verb), matching
+  `armHostPoolClient.ts`'s FetchLike/TokenProvider/ArmLroResult/LRO-polling
+  conventions exactly. Mock-based tests added (`armScalingPlanClient.test.ts`).
+- Added `routes/scalingPlans.ts` (CRUD + attach/detach), registered in
+  `server.ts` in place of the old scaling-policies router.
+- `db/migrations/003_drop_scaling_policies.sql` drops the now-unused table
+  (smoke-tested against local Postgres). `001_init.sql` left untouched as
+  historical record.
+- Frontend: `pages/scaling-plans.tsx` (new, subscription+resourceGroup
+  scoped, since a native plan attaches to multiple host pools) replaces the
+  scaling-policy form that used to live on the host-pool detail page;
+  `lib/api.ts` scaling-policy functions replaced with scaling-plan
+  equivalents.
+- `npx tsc --noEmit` clean on both `apps/api` and `apps/web`; full test
+  suite passes (8 suites / 57 tests, old scaling-engine suites gone, new
+  ARM client suite added).

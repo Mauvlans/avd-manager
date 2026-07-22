@@ -3,7 +3,8 @@ import express from "express";
 import cors from "cors";
 import { onboardingRouter } from "./routes/onboarding";
 import { hostPoolsRouter } from "./routes/hostPools";
-import { scalingPoliciesRouter, costRouter } from "./routes/scalingPolicies";
+import { scalingPlansRouter } from "./routes/scalingPlans";
+import { costRouter } from "./routes/cost";
 import { auditLogRouter } from "./routes/auditLog";
 import { setupRouter } from "./routes/setup";
 
@@ -32,7 +33,7 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 app.use("/api/onboarding", onboardingRouter);
 app.use("/api/host-pools", hostPoolsRouter);
-app.use("/api/scaling-policies", scalingPoliciesRouter);
+app.use("/api/scaling-plans", scalingPlansRouter);
 app.use("/api/cost", costRouter);
 app.use("/api/audit-log", auditLogRouter);
 app.use("/api/setup", setupRouter);

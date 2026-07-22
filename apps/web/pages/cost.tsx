@@ -2,7 +2,7 @@ import { useState } from "react";
 import { getCostEstimate, CostEstimateResponse } from "../lib/api";
 
 /** Cost dashboard: calls the public Azure Retail Prices-backed
- * /api/cost/estimate endpoint (apps/api routes/scalingPolicies.ts costRouter).
+ * /api/cost/estimate endpoint (apps/api routes/cost.ts).
  * This is the ONLY live external call in the whole system that works
  * without any tenant credentials — validated live against the real Azure
  * Retail Prices API in the previous build round. */

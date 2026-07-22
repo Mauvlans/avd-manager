@@ -1,0 +1,12 @@
+-- Retire the custom scaling-policy engine's storage now that native Azure
+-- AVD Scaling Plans (Microsoft.DesktopVirtualization/scalingPlans) own all
+-- scaling behavior — Adam's explicit call not to build a competing
+-- scheduler when Azure ships one for free. ARM is now the sole source of
+-- truth for scaling configuration; there is nothing left to persist
+-- locally for it (unlike host_pools, which we still mirror for fast local
+-- listing), so the table is dropped outright rather than emptied/kept.
+--
+-- 001_init.sql is left untouched as a historical record of the original
+-- schema — see that file's CREATE TABLE scaling_policies for what this
+-- undoes.
+DROP TABLE IF EXISTS scaling_policies;

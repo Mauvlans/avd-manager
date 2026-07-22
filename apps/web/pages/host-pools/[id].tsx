@@ -1,45 +1,40 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import {
-  createScalingPolicy,
   deallocateSessionHost,
   getHostPool,
   HostPoolRow,
-  listScalingPolicies,
   listSessionHosts,
-  ScalingPolicyRow,
   SessionHostRow,
-  setScalingPolicyEnabled,
   startSessionHost,
 } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
 
+/**
+ * Scaling-policy CRUD used to live on this page (custom engine, retired —
+ * see apps/api/src/routes/scalingPlans.ts's header comment). Native AVD
+ * Scaling Plans are managed on their own page (/scaling-plans) since they
+ * are ARM resources scoped to subscription+resourceGroup, not something
+ * that hangs off a single host pool the way the old DB-backed policies
+ * did — a plan can (and normally does) apply to several host pools via
+ * its hostPoolReferences array.
+ */
 export default function HostPoolDetail() {
   const router = useRouter();
   const id = router.query.id as string | undefined;
   const [tenantId] = useTenantId();
   const [pool, setPool] = useState<HostPoolRow | null>(null);
-  const [policies, setPolicies] = useState<ScalingPolicyRow[]>([]);
   const [sessionHosts, setSessionHosts] = useState<SessionHostRow[]>([]);
   const [sessionHostsError, setSessionHostsError] = useState("");
   const [sessionHostActionPending, setSessionHostActionPending] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [showForm, setShowForm] = useState(false);
-
-  const [form, setForm] = useState({
-    name: "",
-    mode: "dynamic_threshold" as "schedule" | "dynamic_threshold",
-    maxHostsPerAction: 2,
-    maxCostDeltaPerActionUsdPerHour: 5.0,
-  });
 
   async function refresh() {
     if (!tenantId || !id) return;
     setError("");
     try {
-      const [p, pol] = await Promise.all([getHostPool(tenantId, id), listScalingPolicies(tenantId, id)]);
+      const p = await getHostPool(tenantId, id);
       setPool(p);
-      setPolicies(pol);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -65,28 +60,6 @@ export default function HostPoolDetail() {
     refreshSessionHosts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId, id]);
-
-  async function handleCreatePolicy() {
-    if (!id) return;
-    setError("");
-    try {
-      await createScalingPolicy(tenantId, { hostPoolId: id, ...form });
-      setShowForm(false);
-      refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  async function handleToggle(p: ScalingPolicyRow) {
-    setError("");
-    try {
-      await setScalingPolicyEnabled(tenantId, p.id, !p.enabled);
-      refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
 
   async function handleSessionHostAction(hostName: string, action: "start" | "deallocate") {
     if (!id) return;
@@ -123,10 +96,9 @@ export default function HostPoolDetail() {
       <h2>Session hosts</h2>
       <p className="warn">
         Start/Deallocate call the same ArmHostPoolClient.startVm/deallocateVm methods (and the same
-        ARM long-running-operation polling) that the autoscale timer uses — this is not a separate
-        "trust the POST" shortcut. In this sandbox (no live Azure subscription/RBAC grant), ARM
-        calls will fail with the FakeTokenProvider's token; that failure is surfaced below, not
-        hidden.
+        ARM long-running-operation polling) used elsewhere in this app. In this sandbox (no live
+        Azure subscription/RBAC grant), ARM calls will fail with the FakeTokenProvider's token;
+        that failure is surfaced below, not hidden.
       </p>
       <button className="secondary" onClick={refreshSessionHosts}>Refresh</button>
       {sessionHostsError && <p className="err">{sessionHostsError}</p>}
@@ -176,80 +148,13 @@ export default function HostPoolDetail() {
         </table>
       )}
 
-      <h2>Scaling policies</h2>
+      <h2>Scaling</h2>
       <p className="warn">
-        Safety caps below are enforced server-side by ScalingPolicyEvaluator regardless of what a
-        policy requests — a policy can never be created or run with caps disabled (values must be
-        &gt; 0), and the evaluator clamps any decision that would exceed them at evaluation time.
+        Autoscaling for this host pool is managed via native Azure AVD Scaling Plans, not a custom
+        engine — see the <a href="/scaling-plans">Scaling Plans</a> page to view, create, or attach
+        a plan to this host pool (subscription: <span className="mono">{pool.subscription_id}</span>,
+        resource group: {pool.resource_group}).
       </p>
-      <button onClick={() => setShowForm((s) => !s)}>{showForm ? "Cancel" : "+ New scaling policy"}</button>
-
-      {showForm && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <label>Name</label>
-          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <label>Mode</label>
-          <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value as any })}>
-            <option value="dynamic_threshold">Dynamic threshold</option>
-            <option value="schedule">Schedule</option>
-          </select>
-          <div className="cap-field">
-            <label>Max hosts per action (safety cap)</label>
-            <input
-              type="number"
-              min={1}
-              value={form.maxHostsPerAction}
-              onChange={(e) => setForm({ ...form, maxHostsPerAction: Number(e.target.value) })}
-            />
-          </div>
-          <div className="cap-field">
-            <label>Max cost delta per action, USD/hour (safety cap)</label>
-            <input
-              type="number"
-              min={0.01}
-              step={0.01}
-              value={form.maxCostDeltaPerActionUsdPerHour}
-              onChange={(e) => setForm({ ...form, maxCostDeltaPerActionUsdPerHour: Number(e.target.value) })}
-            />
-          </div>
-          <button onClick={handleCreatePolicy} disabled={!form.name}>
-            Create policy
-          </button>
-        </div>
-      )}
-
-      {policies.length === 0 ? (
-        <p>No scaling policies yet.</p>
-      ) : (
-        <table style={{ marginTop: 16 }}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Mode</th>
-              <th>Enabled</th>
-              <th>Max hosts/action</th>
-              <th>Max cost Δ/hr</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {policies.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td>{p.mode}</td>
-                <td>{p.enabled ? "Yes" : "No"}</td>
-                <td>{p.max_hosts_per_action}</td>
-                <td>${p.max_cost_delta_per_action_usd_per_hour}</td>
-                <td>
-                  <button className="secondary" onClick={() => handleToggle(p)}>
-                    {p.enabled ? "Disable" : "Enable"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </div>
   );
 }
