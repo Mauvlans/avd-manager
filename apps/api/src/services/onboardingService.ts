@@ -49,28 +49,38 @@ export class OnboardingService {
    * The customer runs this in their own subscription; it deploys the custom
    * least-privilege role + assignment. See infra/bicep/rbac-delegation.bicep.
    *
-   * Auto-fills avdManagerServicePrincipalObjectId and tenantCallbackState as
-   * portal query-string params so Azure's Custom Deployment blade
-   * pre-populates those fields instead of leaving the admin to find/paste
-   * the service principal object id themselves (we already know it — it
-   * came back on the Graph-consent redirect and is stored on the pending
-   * subscriptions_registry row). Azure's portal reads any query param whose
-   * name matches a template parameter name and pre-fills that field; params
-   * that don't match a template parameter (subscriptionId) are used by
-   * Azure's own blade UI (subscription picker), not passed to the template. */
+   * Auto-fills avdManagerServicePrincipalObjectId and tenantCallbackState so
+   * Azure's Custom Deployment blade pre-populates those fields instead of
+   * leaving the admin to find/paste the service principal object id
+   * themselves (we already know it — it came back on the Graph-consent
+   * redirect and is stored on the pending subscriptions_registry row).
+   *
+   * IMPORTANT (caught live — this did NOT work in an earlier version):
+   * portal.azure.com is a hash-routed single-page app. Its own router only
+   * reads query parameters that appear AFTER the `#` (inside the
+   * `#create/Microsoft.Template/uri/...` fragment), not ordinary query
+   * parameters attached before the `#` — `URL.searchParams.set()` on this
+   * template URL attaches them BEFORE the `#` (since the base template URL
+   * has no `?` of its own), which the portal's client-side router never
+   * sees or parses. Adam confirmed the field stayed empty every time
+   * despite the URL containing the right value. Fixed by appending the
+   * parameters onto the fragment string itself instead of via
+   * URL.searchParams. */
   async getDeployToAzureUrl(tenantId: string, subscriptionIdHint?: string): Promise<string> {
-    const url = new URL(this.deployToAzureTemplateUrl);
-    url.searchParams.set("tenantCallbackState", tenantId);
-    if (subscriptionIdHint) url.searchParams.set("subscriptionId", subscriptionIdHint);
+    const [baseUrl, fragment] = this.deployToAzureTemplateUrl.split("#");
+    const fragmentParams = new URLSearchParams();
+    fragmentParams.set("tenantCallbackState", tenantId);
+    if (subscriptionIdHint) fragmentParams.set("subscriptionId", subscriptionIdHint);
 
     const servicePrincipalId = await withTenant(tenantId, async (client) => {
       const row = await this.getPendingRegistryRow(client, tenantId);
       return row?.graph_consent_service_principal_id ?? null;
     });
     if (servicePrincipalId) {
-      url.searchParams.set("avdManagerServicePrincipalObjectId", servicePrincipalId);
+      fragmentParams.set("avdManagerServicePrincipalObjectId", servicePrincipalId);
     }
-    return url.toString();
+
+    return `${baseUrl}#${fragment}?${fragmentParams.toString()}`;
   }
 
   /** Callback invoked after the customer's admin completes Graph consent.
