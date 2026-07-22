@@ -9,6 +9,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .sidebar-link { color: #9198a1; text-decoration: none; padding: 10px 20px; font-size: 14px; border-left: 3px solid transparent; }
 .sidebar-link:hover { color: #e6edf3; background: #1c2128; }
 .sidebar-link.active { color: #58a6ff; background: #1c2128; border-left-color: #1f6feb; font-weight: 600; }
+.sidebar-sub { display: flex; flex-direction: column; }
+.sidebar-sublink { padding-left: 36px; font-size: 13px; }
 .app-main { flex: 1; padding: 24px; max-width: 1100px; }
 .nav { display: flex; align-items: center; gap: 24px; padding: 16px 24px; border-bottom: 1px solid #21262d; }
 .nav nav { display: flex; gap: 16px; }
