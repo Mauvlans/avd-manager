@@ -1,5 +1,7 @@
 import { withSystem } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
+import { getPlatformConfig } from "../services/platformConfigStore";
+import { ArmRoleAssignmentVerifier } from "../services/armRoleAssignmentVerifier";
 
 /**
  * Periodic RBAC drift-detection job (this is our replacement for the
@@ -86,7 +88,21 @@ export async function runPermissionHealthCheck(
 }
 
 if (require.main === module) {
-  runPermissionHealthCheck()
+  // When run directly (e.g. as a scheduled job), use the real ARM-backed
+  // verifier if a platform app registration + secret are configured;
+  // otherwise fall back to the stub so this can still be exercised without
+  // live credentials. See platformConfigStore.ts and
+  // armRoleAssignmentVerifier.ts for why a real verifier — not a
+  // customer-side webhook — is how RBAC grants actually get detected (ARM
+  // template deployments have no built-in "call this webhook on success"
+  // primitive without heavyweight deploymentScripts machinery).
+  const config = getPlatformConfig();
+  const verifier =
+    config.clientSecret && config.clientId !== "00000000-0000-0000-0000-000000000000"
+      ? new ArmRoleAssignmentVerifier(config.clientId, config.clientSecret)
+      : new StubRoleAssignmentVerifier();
+
+  runPermissionHealthCheck(verifier)
     .then((result) => {
       console.log(`[permission-health-check] checked=${result.checked} drift=${result.driftDetected}`);
       process.exit(0);

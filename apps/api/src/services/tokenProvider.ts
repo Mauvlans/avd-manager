@@ -40,7 +40,8 @@ export async function acquireClientCredentialsToken(
   entraTenantId: string,
   clientId: string,
   clientSecret: string,
-  scope: string
+  scope: string,
+  fetchImpl: typeof fetch = fetch
 ): Promise<string> {
   const tokenUrl = `https://login.microsoftonline.com/${entraTenantId}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
@@ -49,7 +50,7 @@ export async function acquireClientCredentialsToken(
     scope,
     grant_type: "client_credentials",
   });
-  const res = await fetch(tokenUrl, {
+  const res = await fetchImpl(tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),

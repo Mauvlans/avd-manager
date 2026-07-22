@@ -47,6 +47,17 @@ resource avdManagerCustomRole 'Microsoft.Authorization/roleDefinitions@2022-04-0
           'Microsoft.Compute/virtualMachines/instanceView/read'
           // Needed to resolve VM -> NIC -> resource group context in some ARM calls.
           'Microsoft.Resources/subscriptions/resourceGroups/read'
+          // Needed by the periodic permission health-check job
+          // (permissionHealthCheck.ts / armRoleAssignmentVerifier.ts) to list
+          // role assignments at this subscription scope and confirm THIS
+          // grant is still present/unmodified — read-only, does not grant
+          // any ability to create/modify/delete role assignments. Found to
+          // be missing live: without it, ARM's roleAssignments list call
+          // silently returns an empty list rather than an explicit
+          // permission error, making the app unable to verify its own
+          // grant at all (a real chicken-and-egg gap in the original
+          // least-privilege role, not a bug in the verifier code itself).
+          'Microsoft.Authorization/roleAssignments/read'
         ]
         notActions: []
         dataActions: []

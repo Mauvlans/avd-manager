@@ -46,7 +46,8 @@
               "Microsoft.DesktopVirtualization/*",
               "Microsoft.Compute/virtualMachines/*",
               "Microsoft.Compute/virtualMachines/instanceView/read",
-              "Microsoft.Resources/subscriptions/resourceGroups/read"
+              "Microsoft.Resources/subscriptions/resourceGroups/read",
+              "Microsoft.Authorization/roleAssignments/read"
             ],
             "notActions": [],
             "dataActions": [],
