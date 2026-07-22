@@ -31,7 +31,7 @@ let current: PlatformConfig = {
   clientSecret: process.env.ENTRA_APP_CLIENT_SECRET || null,
   graphConsentRedirectUri:
     process.env.GRAPH_CONSENT_REDIRECT_URI ||
-    `http://localhost:${process.env.PORT ?? 4000}/api/onboarding/graph-consent/callback`,
+    `http://10.0.0.27:${process.env.PORT ?? 4000}/api/onboarding/graph-consent/callback`,
   deployToAzureRbacTemplateUrl:
     process.env.DEPLOY_TO_AZURE_RBAC_TEMPLATE_URL ||
     "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FMauvlans%2Favd-manager%2Fmain%2Finfra%2Fbicep%2Frbac-delegation.json",

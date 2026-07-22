@@ -2,7 +2,8 @@ import { randomUUID } from "crypto";
 import type { PoolClient } from "pg";
 import { withTenant, withSystem } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
-import { buildAdminConsentUrl } from "../services/graphClient";
+import { buildAdminConsentUrl, GraphClient } from "../services/graphClient";
+import { acquireClientCredentialsToken } from "../services/tokenProvider";
 
 /**
  * Onboarding service: generates the Graph admin-consent link and
@@ -24,7 +25,8 @@ export class OnboardingService {
   constructor(
     private readonly appClientId: string,
     private readonly graphRedirectUri: string,
-    private readonly deployToAzureTemplateUrl: string
+    private readonly deployToAzureTemplateUrl: string,
+    private readonly appClientSecret: string | null = null
   ) {}
 
   /** Builds the Graph admin-consent URL (grant a) to start onboarding a new
@@ -73,10 +75,27 @@ export class OnboardingService {
 
   /** Callback invoked after the customer's admin completes Graph consent.
    * Microsoft's redirect includes the real Entra tenant GUID (`tenant`
-   * query param) and the resulting service principal id — this is the
-   * FIRST time we learn who the customer is, so this call auto-creates (or
-   * reuses, if this Entra tenant already onboarded before) the tenant row,
-   * instead of requiring a prior manual "create tenant" step.
+   * query param) — this is the FIRST time we learn who the customer is, so
+   * this call auto-creates (or reuses, if this Entra tenant already
+   * onboarded before) the tenant row, instead of requiring a prior manual
+   * "create tenant" step.
+   *
+   * IMPORTANT: Microsoft's admin-consent redirect does NOT include a
+   * servicePrincipalId parameter — an earlier version of this codebase
+   * incorrectly assumed it would and 400'd on every real consent
+   * completion (only caught once a real admin actually clicked through
+   * consent; mocked tests never exercise a real AAD redirect's actual
+   * query string). The service principal for our app in the customer's
+   * tenant has to be looked up via Graph, using an app-only
+   * (client-credentials) token for OUR OWN app against THIS customer's
+   * tenant — which itself only works because admin consent (which just
+   * happened) is what authorizes our app to get any token in their tenant
+   * at all. If appClientSecret isn't configured, this degrades to
+   * recording consent with a null service principal id rather than
+   * failing the whole callback — the RBAC step below doesn't strictly
+   * need it (Deploy-to-Azure already asks for/embeds the SP id itself via
+   * getDeployToAzureUrl's lookup), so a real product would want a retry
+   * job here more than a hard failure.
    *
    * Privileged (withSystem): tenant creation legitimately spans tenants
    * (there's no RLS context yet for a tenant we're only just learning
@@ -85,9 +104,10 @@ export class OnboardingService {
    * without ever having asked the admin to type in a GUID. */
   async recordGraphConsentGranted(
     entraTenantId: string,
-    servicePrincipalId: string,
     displayNameHint?: string
   ): Promise<{ tenantId: string }> {
+    const servicePrincipalId = await this.resolveOwnServicePrincipalId(entraTenantId);
+
     return withSystem(async (client) => {
       const upserted = await client.query(
         `INSERT INTO tenants (display_name, entra_tenant_id, status)
@@ -118,6 +138,29 @@ export class OnboardingService {
       });
       return { tenantId };
     });
+  }
+
+  /** Looks up our own app's service principal object id inside the
+   * customer's tenant, using an app-only token for OUR app acquired
+   * against THEIR tenant. Returns null (rather than throwing) if no
+   * client secret is configured or the lookup fails — see
+   * recordGraphConsentGranted's docstring for why this is a soft failure,
+   * not a hard one. */
+  private async resolveOwnServicePrincipalId(entraTenantId: string): Promise<string | null> {
+    if (!this.appClientSecret) return null;
+    try {
+      const token = await acquireClientCredentialsToken(
+        entraTenantId,
+        this.appClientId,
+        this.appClientSecret,
+        "https://graph.microsoft.com/.default"
+      );
+      const graphClient = new GraphClient(async () => token);
+      const sp = await graphClient.getServicePrincipalByAppId(this.appClientId);
+      return sp?.id ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Callback invoked after the customer runs the Deploy-to-Azure RBAC

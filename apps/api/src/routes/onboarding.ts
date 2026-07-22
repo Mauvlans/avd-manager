@@ -11,7 +11,12 @@ export const onboardingRouter = Router();
  * platformConfigStore. */
 function getOnboardingService(): OnboardingService {
   const config = getPlatformConfig();
-  return new OnboardingService(config.clientId, config.graphConsentRedirectUri, config.deployToAzureRbacTemplateUrl);
+  return new OnboardingService(
+    config.clientId,
+    config.graphConsentRedirectUri,
+    config.deployToAzureRbacTemplateUrl,
+    config.clientSecret
+  );
 }
 
 /** Tells the onboarding wizard whether Setup still needs to run, so it can
@@ -54,19 +59,14 @@ onboardingRouter.get("/tenants/:tenantId/deploy-to-azure-url", async (req, res) 
  * and no manual tenant-id copy/paste between tabs. */
 onboardingRouter.get("/graph-consent/callback", async (req, res) => {
   const entraTenantId = String(req.query.tenant ?? "");
-  const servicePrincipalId = String(req.query.servicePrincipalId ?? "");
   const displayNameHint = typeof req.query.displayName === "string" ? req.query.displayName : undefined;
-  const webAppBaseUrl = process.env.WEB_APP_BASE_URL || "http://localhost:3000";
-  if (!entraTenantId || !servicePrincipalId) {
+  const webAppBaseUrl = process.env.WEB_APP_BASE_URL || "http://10.0.0.27:3000";
+  if (!entraTenantId) {
     return res
       .status(400)
-      .redirect(`${webAppBaseUrl}/onboarding?consentError=${encodeURIComponent("missing tenant/servicePrincipalId from consent redirect")}`);
+      .redirect(`${webAppBaseUrl}/onboarding?consentError=${encodeURIComponent("missing tenant from consent redirect")}`);
   }
-  const { tenantId } = await getOnboardingService().recordGraphConsentGranted(
-    entraTenantId,
-    servicePrincipalId,
-    displayNameHint
-  );
+  const { tenantId } = await getOnboardingService().recordGraphConsentGranted(entraTenantId, displayNameHint);
   res.redirect(`${webAppBaseUrl}/onboarding?tenantId=${tenantId}&consentDone=1`);
 });
 
