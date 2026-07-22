@@ -50,6 +50,7 @@ export default function Onboarding() {
   const [consentUrl, setConsentUrl] = useState("");
   const [deployUrl, setDeployUrl] = useState("");
   const [deploySpObjectId, setDeploySpObjectId] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState("");
   const [error, setError] = useState("");
   const [registryRows, setRegistryRows] = useState<SubscriptionsRegistryRow[]>([]);
   const [registryError, setRegistryError] = useState("");
@@ -214,6 +215,38 @@ export default function Onboarding() {
     }
   }
 
+  /** navigator.clipboard is only available in secure contexts (HTTPS or
+   * literal localhost) — this wizard is served over plain http:// on a LAN
+   * IP for local/dev use, where navigator.clipboard is undefined entirely
+   * (not merely permission-denied), which is what threw "Cannot read
+   * properties of undefined (reading 'writeText')" when Adam clicked Copy.
+   * Falls back to the classic hidden-textarea + document.execCommand('copy')
+   * trick, which works in any context including plain HTTP. */
+  function copyToClipboard(text: string) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(
+        () => setCopyStatus("Copied!"),
+        () => setCopyStatus("Copy failed — select and copy manually.")
+      );
+      return;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      const ok = document.execCommand("copy");
+      setCopyStatus(ok ? "Copied!" : "Copy failed — select and copy manually.");
+    } catch {
+      setCopyStatus("Copy failed — select and copy manually.");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
   return (
     <div>
       <h1>Tenant Onboarding</h1>
@@ -355,11 +388,12 @@ export default function Onboarding() {
                     <button
                       type="button"
                       className="secondary"
-                      onClick={() => navigator.clipboard.writeText(deploySpObjectId)}
+                      onClick={() => copyToClipboard(deploySpObjectId)}
                     >
                       Copy
                     </button>
                   </div>
+                  {copyStatus && <p style={{ marginTop: 8, marginBottom: 0 }}>{copyStatus}</p>}
                 </div>
               ) : (
                 <p className="warn" style={{ marginTop: 12 }}>
