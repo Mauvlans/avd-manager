@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import DeployLayout from "../components/DeployLayout";
 import SidePanel from "../components/SidePanel";
-import { createHostPool } from "../lib/api";
+import { createHostPool, getOnboardingRegistry, listHostPools } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
 /**
@@ -95,6 +95,7 @@ export default function Deploy() {
   const [activeTemplate, setActiveTemplate] = useState<TemplateDefinition | null>(null);
   const [name, setName] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
+  const [knownSubscriptionIds, setKnownSubscriptionIds] = useState<string[]>([]);
   const [resourceGroup, setResourceGroup] = useState("");
   const [location, setLocation] = useState("eastus");
   const [maxSessionLimit, setMaxSessionLimit] = useState(10);
@@ -102,10 +103,41 @@ export default function Deploy() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // Subscription dropdown is sourced from what AVD Manager already knows
+  // about for this tenant — RBAC-granted subscriptions from the onboarding
+  // registry (the ones we're actually authorized to deploy into) plus any
+  // subscription IDs already used on existing host pools (covers the case
+  // where a subscription was used for a host pool before RBAC-grant
+  // tracking caught up, or a registry row's subscription_id is still
+  // null/pending). De-duplicated, RBAC-granted ones listed first since
+  // they're the ones most likely to actually work.
+  useEffect(() => {
+    if (!tenantId) return;
+    Promise.all([
+      getOnboardingRegistry(tenantId).catch(() => []),
+      listHostPools(tenantId).catch(() => []),
+    ]).then(([registryRows, hostPools]) => {
+      const granted = registryRows
+        .filter((r) => r.subscription_id && r.rbac_grant_status === "granted")
+        .map((r) => r.subscription_id as string);
+      const others = registryRows
+        .filter((r) => r.subscription_id && r.rbac_grant_status !== "granted")
+        .map((r) => r.subscription_id as string);
+      const fromHostPools = hostPools.map((h) => h.subscription_id);
+      const seen = new Set<string>();
+      const ordered = [...granted, ...others, ...fromHostPools].filter((id) => {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      setKnownSubscriptionIds(ordered);
+    });
+  }, [tenantId]);
+
   function openTemplate(t: TemplateDefinition) {
     setActiveTemplate(t);
     setName("");
-    setSubscriptionId("");
+    setSubscriptionId(knownSubscriptionIds[0] ?? "");
     setResourceGroup("");
     setLocation("eastus");
     setMaxSessionLimit(t.preset.defaultMaxSessionLimit);
@@ -197,11 +229,28 @@ export default function Deploy() {
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="contoso-desktops-01" />
 
           <label>Subscription ID</label>
-          <input
-            value={subscriptionId}
-            onChange={(e) => setSubscriptionId(e.target.value)}
-            placeholder="11111111-1111-1111-1111-111111111111"
-          />
+          {knownSubscriptionIds.length > 0 ? (
+            <select value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)}>
+              {knownSubscriptionIds.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+              <option value="">Other (enter manually)…</option>
+            </select>
+          ) : (
+            <p className="warn" style={{ marginTop: 0 }}>
+              No subscriptions on file yet for this tenant — complete Settings &gt; Onboarding&apos;s RBAC
+              deployment step, or enter one manually below.
+            </p>
+          )}
+          {(knownSubscriptionIds.length === 0 || subscriptionId === "") && (
+            <input
+              value={subscriptionId}
+              onChange={(e) => setSubscriptionId(e.target.value)}
+              placeholder="11111111-1111-1111-1111-111111111111"
+            />
+          )}
 
           <label>Resource Group</label>
           <input value={resourceGroup} onChange={(e) => setResourceGroup(e.target.value)} placeholder="rg-avd-prod" />
