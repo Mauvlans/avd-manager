@@ -22,6 +22,7 @@ import "../styles/globals.css";
 const NAV_ITEMS = [
   { href: "/", label: "Overview" },
   { href: "/host-pools", label: "Host Pools" },
+  { href: "/deploy", label: "Deploy" },
   { href: "/scaling-plans", label: "Scaling Plans" },
   { href: "/cost", label: "Cost" },
   { href: "/audit-log", label: "Audit Log" },

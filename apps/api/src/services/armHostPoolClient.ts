@@ -231,6 +231,7 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
       hostPoolType: HostPoolType;
       loadBalancerType: LoadBalancerType;
       maxSessionLimit: number;
+      preferredAppGroupType?: "Desktop" | "RailApplication";
     },
     opts?: { timeoutMs?: number; pollIntervalMs?: number }
   ): Promise<ArmLroResult<HostPool>> {
@@ -240,7 +241,7 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
         hostPoolType: params.hostPoolType,
         loadBalancerType: params.loadBalancerType,
         maxSessionLimit: params.maxSessionLimit,
-        preferredAppGroupType: "Desktop",
+        preferredAppGroupType: params.preferredAppGroupType ?? "Desktop",
       },
     };
     const url = this.hostPoolUrl(subscriptionId, resourceGroup, name);

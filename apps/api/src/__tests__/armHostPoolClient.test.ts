@@ -42,6 +42,40 @@ describe("ArmHostPoolClient (mocked ARM HTTP)", () => {
     expect(body.properties.hostPoolType).toBe("Pooled");
   });
 
+  it("defaults preferredAppGroupType to Desktop, and passes through RailApplication when specified (Deploy > Template's Remote Apps preset)", async () => {
+    const mockFetch: FetchLike = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.DesktopVirtualization/hostPools/pool1",
+        name: "pool1",
+        location: "eastus",
+        properties: { hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+      }),
+    })) as unknown as FetchLike;
+
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+
+    await client.createOrUpdateHostPool("sub", "rg", "pool1", {
+      location: "eastus",
+      hostPoolType: "Pooled",
+      loadBalancerType: "BreadthFirst",
+      maxSessionLimit: 10,
+    });
+    const [, initNoOverride] = (mockFetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(initNoOverride.body).properties.preferredAppGroupType).toBe("Desktop");
+
+    await client.createOrUpdateHostPool("sub", "rg", "pool2", {
+      location: "eastus",
+      hostPoolType: "Pooled",
+      loadBalancerType: "BreadthFirst",
+      maxSessionLimit: 10,
+      preferredAppGroupType: "RailApplication",
+    });
+    const [, initOverride] = (mockFetch as jest.Mock).mock.calls[1];
+    expect(JSON.parse(initOverride.body).properties.preferredAppGroupType).toBe("RailApplication");
+  });
+
   it("returns null from getHostPool on a 404", async () => {
     const mockFetch: FetchLike = jest.fn(async () => ({
       ok: false,

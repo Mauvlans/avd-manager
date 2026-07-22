@@ -121,6 +121,7 @@ export function createHostPool(
     hostPoolType: "Personal" | "Pooled";
     loadBalancerType: "BreadthFirst" | "DepthFirst" | "Persistent";
     maxSessionLimit?: number;
+    preferredAppGroupType?: "Desktop" | "RailApplication";
   }
 ) {
   return request<HostPoolRow & { warning?: string }>("/api/host-pools", {

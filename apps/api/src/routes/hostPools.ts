@@ -33,7 +33,7 @@ hostPoolsRouter.get("/:id", async (req, res) => {
 
 hostPoolsRouter.post("/", async (req, res) => {
   const tenantId = (req as any).tenantId as string;
-  const { subscriptionId, resourceGroup, name, location, hostPoolType, loadBalancerType, maxSessionLimit } =
+  const { subscriptionId, resourceGroup, name, location, hostPoolType, loadBalancerType, maxSessionLimit, preferredAppGroupType } =
     req.body ?? {};
   if (!subscriptionId || !resourceGroup || !name || !location || !hostPoolType || !loadBalancerType) {
     return res.status(400).json({ error: "missing required fields" });
@@ -75,6 +75,7 @@ hostPoolsRouter.post("/", async (req, res) => {
       hostPoolType: hostPoolType as HostPoolType,
       loadBalancerType: loadBalancerType as LoadBalancerType,
       maxSessionLimit: maxSessionLimit ?? 10,
+      preferredAppGroupType: preferredAppGroupType === "RailApplication" ? "RailApplication" : "Desktop",
     });
     if (result.outcome !== "succeeded") {
       return res.status(202).json({
