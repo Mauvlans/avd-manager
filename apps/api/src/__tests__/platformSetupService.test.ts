@@ -86,7 +86,7 @@ describe("PlatformSetupService (mocked Graph/AAD HTTP)", () => {
       throw new Error(`unexpected call: ${url}`);
     }) as unknown as FetchLike;
 
-    const service = new PlatformSetupService(mockFetch);
+    const service = new PlatformSetupService(mockFetch, 0);
     const result = await service.createPlatformAppRegistration(
       "admin-access-token",
       "AVD Manager (dev)",
@@ -132,7 +132,7 @@ describe("PlatformSetupService (mocked Graph/AAD HTTP)", () => {
       throw new Error(`unexpected call: ${url}`);
     }) as unknown as FetchLike;
 
-    const service = new PlatformSetupService(mockFetch);
+    const service = new PlatformSetupService(mockFetch, 0);
     const result = await service.createPlatformAppRegistration(
       "admin-access-token",
       "AVD Manager (dev)",

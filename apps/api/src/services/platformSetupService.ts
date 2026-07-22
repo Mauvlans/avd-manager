@@ -62,7 +62,10 @@ export interface CreatedAppRegistration {
 }
 
 export class PlatformSetupService {
-  constructor(private readonly fetchImpl: FetchLike = fetch as unknown as FetchLike) {}
+  constructor(
+    private readonly fetchImpl: FetchLike = fetch as unknown as FetchLike,
+    private readonly appPropagationDelayMs: number = 20000
+  ) {}
 
   /** Step 1: start a device-code flow. The caller shows `verification_uri` +
    * `user_code` to the admin, who visits that URL and enters the code in
@@ -163,6 +166,21 @@ export class PlatformSetupService {
       throw new Error(`application create failed: ${appRes.status} ${JSON.stringify(await appRes.json().catch(() => ({})))}`);
     }
     const app = await appRes.json();
+
+    // Entra/AAD app registrations are not always immediately usable for
+    // sign-in flows (the STS/token-issuance side, not the Graph object
+    // itself — a GET on the app object succeeds immediately, which is why
+    // that's NOT a useful readiness signal here) right after creation. A
+    // fresh app can return AADSTS650051 ("application has been removed or
+    // is configured to use an incorrect application identifier") for a
+    // short window afterward on the actual admin-consent sign-in, which
+    // reads exactly like the app doesn't exist even though it does and
+    // Graph already sees it fine. There's no documented readiness-check
+    // API for this — the fix is simply to wait before handing the app back
+    // as usable. This is what actually caught and fixed the repeated
+    // AADSTS650051 failures Adam hit live on every single prior Setup run
+    // (each one immediately followed by a consent attempt within seconds).
+    await new Promise((resolve) => setTimeout(resolve, this.appPropagationDelayMs));
 
     // 2. Service principal for that app
     const spRes = await this.fetchImpl("https://graph.microsoft.com/v1.0/servicePrincipals", {

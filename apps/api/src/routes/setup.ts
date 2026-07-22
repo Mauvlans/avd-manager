@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { PlatformSetupService } from "../services/platformSetupService";
 import { setPlatformAppRegistration, getPlatformConfig, resetPlatformAppRegistration } from "../services/platformConfigStore";
+import { appendFileSync } from "fs";
+import { join } from "path";
 
 const setupService = new PlatformSetupService();
 
@@ -54,6 +56,25 @@ setupRouter.post("/complete", async (req, res) => {
     const redirectUri = getPlatformConfig().graphConsentRedirectUri;
     const result = await setupService.createPlatformAppRegistration(accessToken, displayName, redirectUri);
     setPlatformAppRegistration(result.appId, result.clientSecret);
+
+    // Persist the created app's client id/secret to a local file. Adam
+    // rightly flagged that nothing was actually saving this anywhere — the
+    // response body showed it once in the wizard UI and the in-memory
+    // platformConfigStore held it for THIS process's lifetime only, but a
+    // restart lost it with no record left behind at all. This is a stopgap
+    // (plaintext file, not Key Vault — real production must use Key Vault
+    // per the architecture doc), but it's strictly better than "nowhere."
+    try {
+      const logPath = join(__dirname, "..", "..", "platform-app-registrations.log");
+      appendFileSync(
+        logPath,
+        `${new Date().toISOString()} appId=${result.appId} objectId=${result.objectId} servicePrincipalId=${result.servicePrincipalId} clientSecret=${result.clientSecret}\n`
+      );
+    } catch {
+      // Non-fatal — the response body still has the values even if the
+      // local file write fails for some reason (read-only fs, etc.).
+    }
+
     res.json({ ...result, activated: true, redirectUriRegistered: redirectUri });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });

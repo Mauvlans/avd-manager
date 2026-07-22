@@ -1,4 +1,6 @@
 node_modules/
+*.log
+platform-app-registrations.log
 dist/
 build/
 .next/
