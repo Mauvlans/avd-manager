@@ -369,17 +369,10 @@ export default function Onboarding() {
           </button>
           {deployUrl && (
             <>
-              <p className="mono" style={{ marginTop: 12 }}>
-                <a href={deployUrl} target="_blank" rel="noreferrer">
-                  {deployUrl}
-                </a>
-              </p>
               {deploySpObjectId ? (
                 <div style={{ marginTop: 12, padding: 8, border: "1px solid #444", borderRadius: 4 }}>
-                  <p style={{ marginTop: 0 }}>
-                    Azure has no way to pre-fill this from the link above — the customer&apos;s admin
-                    must paste it manually into the &quot;Avd Manager Service Principal Object Id&quot;
-                    field on the deployment page that opens:
+                  <p style={{ marginTop: 0, marginBottom: 8 }}>
+                    Copy your AVD Manager Service Principal Object Id:
                   </p>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <code className="mono" style={{ flex: 1 }}>
@@ -401,6 +394,14 @@ export default function Onboarding() {
                   first.
                 </p>
               )}
+              <p className="warn" style={{ marginTop: 12, marginBottom: 4 }}>
+                Deploy to Azure Link:
+              </p>
+              <p className="mono" style={{ marginTop: 0 }}>
+                <a href={deployUrl} target="_blank" rel="noreferrer">
+                  {deployUrl}
+                </a>
+              </p>
             </>
           )}
         </div>
