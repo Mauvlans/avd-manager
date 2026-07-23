@@ -2,6 +2,7 @@ import type { AppProps } from "next/app";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import "../styles/globals.css";
+import ThemeToggle from "../components/ThemeToggle";
 
 /**
  * L1 (top-level) navigation, restructured from a single horizontal top-nav
@@ -62,6 +63,7 @@ export default function App({ Component, pageProps }: AppProps) {
             );
           })}
         </nav>
+        <ThemeToggle />
       </aside>
       <main className="app-main">
         <Component {...pageProps} />

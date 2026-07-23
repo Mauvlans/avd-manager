@@ -1,59 +1,146 @@
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #0e1116; color: #e6edf3; }
-/* L1 sidebar shell — replaces the old horizontal .nav top-bar. Kept .nav's
-   rules below (harmless if unused) in case any page still references them
-   directly, but no page should need to after this change. */
+/* Theme palette ported from Autopatch Companion
+   (/mnt/ai-work/autopatch-portal/src/app/globals.css) — same shadcn-style
+   HSL CSS variables, same light/dark split via a .dark class on <html>.
+   AVD Manager previously had no variable system at all (hardcoded
+   GitHub-dark-style hex colors everywhere) and no light/dark toggle —
+   this is a real port, not a copy-paste of an existing mechanism. */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.5rem;
+
+  --sidebar-background: 222.2 84% 4.9%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-primary: 221.2 83.2% 53.3%;
+  --sidebar-primary-foreground: 210 40% 98%;
+  --sidebar-accent: 217.2 32.6% 17.5%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --sidebar-border: 217.2 32.6% 17.5%;
+  --sidebar-ring: 221.2 83.2% 53.3%;
+
+  /* Success/warning/danger badges — not part of Autopatch's base palette
+     (that only defines background/foreground/primary/etc, not semantic
+     status colors), so these keep AVD Manager's existing GitHub-style
+     hues, just expressed as variables now instead of hardcoded hex, so
+     they can still shift sensibly between light/dark. */
+  --success: 142 71% 30%;
+  --success-bg: 142 60% 92%;
+  --warning: 36 90% 40%;
+  --warning-bg: 45 90% 92%;
+  --danger: 0 72% 45%;
+  --danger-bg: 0 80% 94%;
+}
+
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 224.3 76.3% 48%;
+
+  --sidebar-background: 240 5.9% 10%;
+  --sidebar-foreground: 240 4.8% 95.9%;
+  --sidebar-primary: 224.3 76.3% 48%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 3.7% 15.9%;
+  --sidebar-accent-foreground: 240 4.8% 95.9%;
+  --sidebar-border: 240 3.7% 15.9%;
+  --sidebar-ring: 217.2 91.2% 59.8%;
+
+  --success: 142 71% 45%;
+  --success-bg: 142 40% 15%;
+  --warning: 36 90% 55%;
+  --warning-bg: 45 60% 15%;
+  --danger: 0 90% 65%;
+  --danger-bg: 0 50% 18%;
+}
+
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: hsl(var(--background)); color: hsl(var(--foreground)); }
+
 .app-shell { display: flex; min-height: 100vh; }
-.sidebar { width: 220px; flex-shrink: 0; background: #161b22; border-right: 1px solid #21262d; padding: 20px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-.sidebar-brand { font-weight: bold; font-size: 16px; padding: 0 20px 20px; border-bottom: 1px solid #21262d; margin-bottom: 12px; }
-.sidebar-nav { display: flex; flex-direction: column; }
-.sidebar-link { color: #9198a1; text-decoration: none; padding: 10px 20px; font-size: 14px; border-left: 3px solid transparent; }
-.sidebar-link:hover { color: #e6edf3; background: #1c2128; }
-.sidebar-link.active { color: #58a6ff; background: #1c2128; border-left-color: #1f6feb; font-weight: 600; }
+.sidebar { width: 220px; flex-shrink: 0; background: hsl(var(--sidebar-background)); border-right: 1px solid hsl(var(--sidebar-border)); padding: 20px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
+.sidebar-brand { font-weight: bold; font-size: 16px; padding: 0 20px 20px; border-bottom: 1px solid hsl(var(--sidebar-border)); margin-bottom: 12px; color: hsl(var(--sidebar-foreground)); }
+.sidebar-nav { display: flex; flex-direction: column; flex: 1; }
+.sidebar-link { color: hsl(var(--sidebar-foreground) / 0.7); text-decoration: none; padding: 10px 20px; font-size: 14px; border-left: 3px solid transparent; }
+.sidebar-link:hover { color: hsl(var(--sidebar-foreground)); background: hsl(var(--sidebar-accent)); }
+.sidebar-link.active { color: hsl(var(--sidebar-primary-foreground)); background: hsl(var(--sidebar-accent)); border-left-color: hsl(var(--sidebar-primary)); font-weight: 600; }
 .sidebar-sub { display: flex; flex-direction: column; }
 .sidebar-sublink { padding-left: 36px; font-size: 13px; }
-/* L2 sub-navigation (components/SettingsLayout.tsx) — horizontal tab bar
-   under a page's <h1>, GitHub-repo-Settings style. */
-.l2-tabs { display: flex; gap: 4px; border-bottom: 1px solid #21262d; margin-bottom: 20px; }
-.l2-tab { color: #9198a1; text-decoration: none; padding: 8px 14px; font-size: 14px; border-bottom: 2px solid transparent; }
-.l2-tab:hover { color: #e6edf3; }
-.l2-tab.active { color: #e6edf3; border-bottom-color: #1f6feb; font-weight: 600; }
+
+/* Theme toggle button, pinned to the bottom of the sidebar. */
+.theme-toggle { margin: 12px 20px 0; padding: 8px 12px; background: hsl(var(--sidebar-accent)); border: 1px solid hsl(var(--sidebar-border)); color: hsl(var(--sidebar-foreground)); border-radius: 6px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.theme-toggle:hover { background: hsl(var(--sidebar-border)); }
+
+.l2-tabs { display: flex; gap: 4px; border-bottom: 1px solid hsl(var(--border)); margin-bottom: 20px; }
+.l2-tab { color: hsl(var(--muted-foreground)); text-decoration: none; padding: 8px 14px; font-size: 14px; border-bottom: 2px solid transparent; }
+.l2-tab:hover { color: hsl(var(--foreground)); }
+.l2-tab.active { color: hsl(var(--foreground)); border-bottom-color: hsl(var(--primary)); font-weight: 600; }
 .app-main { flex: 1; padding: 24px; max-width: 1100px; }
-.nav { display: flex; align-items: center; gap: 24px; padding: 16px 24px; border-bottom: 1px solid #21262d; }
+.nav { display: flex; align-items: center; gap: 24px; padding: 16px 24px; border-bottom: 1px solid hsl(var(--border)); }
 .nav nav { display: flex; gap: 16px; }
-.nav a { color: #58a6ff; text-decoration: none; }
+.nav a { color: hsl(var(--primary)); text-decoration: none; }
 .container { max-width: 960px; margin: 0 auto; padding: 24px; }
 h1 { font-size: 22px; }
 h2 { font-size: 18px; margin-top: 32px; }
-.card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; color: hsl(var(--card-foreground)); }
 .step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; }
-.step-num { background: #1f6feb; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: bold; }
-label { display: block; margin-bottom: 4px; font-size: 13px; color: #9198a1; }
-input, select { width: 100%; padding: 8px; margin-bottom: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; box-sizing: border-box; }
-button { background: #238636; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 14px; }
-button:hover { background: #2ea043; }
-button.secondary { background: #21262d; border: 1px solid #30363d; }
-button.secondary:hover { background: #30363d; }
+.step-num { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: bold; }
+label { display: block; margin-bottom: 4px; font-size: 13px; color: hsl(var(--muted-foreground)); }
+input, select { width: 100%; padding: 8px; margin-bottom: 12px; background: hsl(var(--background)); border: 1px solid hsl(var(--input)); border-radius: 6px; color: hsl(var(--foreground)); box-sizing: border-box; }
+button { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 14px; }
+button:hover { filter: brightness(1.1); }
+button.secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); border: 1px solid hsl(var(--border)); }
+button.secondary:hover { background: hsl(var(--accent)); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 8px; border-bottom: 1px solid #21262d; font-size: 14px; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid hsl(var(--border)); font-size: 14px; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
-.badge.granted { background: #1a4a2e; color: #3fb950; }
-.badge.pending, .badge.not_requested { background: #4d3800; color: #d29922; }
-.badge.drifted, .badge.revoked { background: #4c1a1a; color: #f85149; }
-.warn { color: #d29922; font-size: 13px; }
-.err { color: #f85149; font-size: 13px; }
+.badge.granted { background: hsl(var(--success-bg)); color: hsl(var(--success)); }
+.badge.pending, .badge.not_requested { background: hsl(var(--warning-bg)); color: hsl(var(--warning)); }
+.badge.drifted, .badge.revoked { background: hsl(var(--danger-bg)); color: hsl(var(--danger)); }
+.warn { color: hsl(var(--warning)); font-size: 13px; }
+.err { color: hsl(var(--danger)); font-size: 13px; }
+.ok { color: hsl(var(--success)); font-size: 13px; }
 .mono { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
-.cap-field { border-left: 3px solid #d29922; padding-left: 12px; margin-bottom: 12px; }
-/* Overview dashboard cards (pages/index.tsx) */
+.cap-field { border-left: 3px solid hsl(var(--warning)); padding-left: 12px; margin-bottom: 12px; }
 .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-.overview-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; }
+.overview-card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 16px; color: hsl(var(--card-foreground)); }
 .overview-card .metric { font-size: 28px; font-weight: bold; margin: 4px 0; }
-.overview-card .metric-label { color: #9198a1; font-size: 13px; }
-/* SidePanel — right-side slide-out blade (components/SidePanel.tsx), used
-   by Deploy > Template's per-template forms instead of an inline card. */
-.side-panel-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(1, 4, 9, 0.6); z-index: 100; display: flex; justify-content: flex-end; }
-.side-panel { width: 420px; max-width: 90vw; height: 100vh; background: #161b22; border-left: 1px solid #30363d; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; animation: side-panel-in 0.18s ease-out; }
+.overview-card .metric-label { color: hsl(var(--muted-foreground)); font-size: 13px; }
+.side-panel-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: hsl(var(--background) / 0.6); z-index: 100; display: flex; justify-content: flex-end; }
+.side-panel { width: 420px; max-width: 90vw; height: 100vh; background: hsl(var(--card)); border-left: 1px solid hsl(var(--border)); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; animation: side-panel-in 0.18s ease-out; color: hsl(var(--card-foreground)); }
 @keyframes side-panel-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-.side-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid #21262d; }
+.side-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid hsl(var(--border)); }
 .side-panel-close { padding: 4px 10px; }
 .side-panel-body { padding: 20px; overflow-y: auto; flex: 1; }
