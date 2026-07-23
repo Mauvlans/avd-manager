@@ -1,7 +1,6 @@
 # AVD Manager
 
-A multi-tenant SaaS control plane for managing Azure Virtual Desktop (AVD) at scale —
-a Nerdio Manager competitor. Host pool / session host lifecycle, autoscaling & cost
+A multi-tenant SaaS control plane for managing Azure Virtual Desktop (AVD) at scale. Host pool / session host lifecycle, autoscaling & cost
 optimization, user & app management, and cost/usage reporting, across many customer
 Azure tenants from a single control plane.
 
