@@ -2,7 +2,7 @@ import { Router } from "express";
 import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { ArmScalingPlanClient } from "../services/armScalingPlanClient";
-import { FakeTokenProvider } from "../services/tokenProvider";
+import { resolveArmAuth } from "../services/armAuthResolver";
 import { tenantAuth } from "../middleware/tenantAuth";
 
 /**
@@ -23,8 +23,9 @@ export const scalingPlansRouter = Router();
 
 scalingPlansRouter.use(tenantAuth);
 
-function buildClient(req: any): ArmScalingPlanClient {
-  return new ArmScalingPlanClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+function buildClient(req: any): Promise<ArmScalingPlanClient> {
+  const tenantId = req.tenantId as string;
+  return resolveArmAuth(tenantId).then(({ entraTenantId, tokenProvider }) => new ArmScalingPlanClient(entraTenantId, tokenProvider));
 }
 
 scalingPlansRouter.get("/", async (req, res) => {
@@ -34,7 +35,7 @@ scalingPlansRouter.get("/", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const plans = await client.listScalingPlans(subscriptionId, resourceGroup);
     res.json(plans);
   } catch (err) {
@@ -49,7 +50,7 @@ scalingPlansRouter.get("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const plan = await client.getScalingPlan(subscriptionId, resourceGroup, req.params.name);
     if (!plan) return res.status(404).json({ error: "not found" });
     res.json(plan);
@@ -65,7 +66,7 @@ scalingPlansRouter.put("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.createOrUpdateScalingPlan(subscriptionId, resourceGroup, req.params.name, params);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {
@@ -95,7 +96,7 @@ scalingPlansRouter.delete("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     await client.deleteScalingPlan(subscriptionId, resourceGroup, req.params.name);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {
@@ -121,7 +122,7 @@ scalingPlansRouter.post("/:name/attach", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId, resourceGroup, and hostPoolArmPath are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.attachScalingPlanToHostPool(
       subscriptionId,
       resourceGroup,
@@ -156,7 +157,7 @@ scalingPlansRouter.post("/:name/detach", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId, resourceGroup, and hostPoolArmPath are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.detachScalingPlanFromHostPool(subscriptionId, resourceGroup, req.params.name, hostPoolArmPath);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {

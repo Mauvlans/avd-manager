@@ -4,7 +4,7 @@ import { writeAuditLog } from "../lib/auditLog";
 import { tenantAuth } from "../middleware/tenantAuth";
 import { ArmResourceGroupClient } from "../services/armResourceGroupClient";
 import { ArmHostPoolClient } from "../services/armHostPoolClient";
-import { FakeTokenProvider } from "../services/tokenProvider";
+import { resolveArmAuth } from "../services/armAuthResolver";
 
 /**
  * Settings > Monitored Resource Groups, per Adam's request: an admin
@@ -27,10 +27,12 @@ export const monitoredResourceGroupsRouter = Router();
 monitoredResourceGroupsRouter.use(tenantAuth);
 
 monitoredResourceGroupsRouter.get("/resource-groups", async (req, res) => {
+  const tenantId = (req as any).tenantId as string;
   const subscriptionId = req.query.subscriptionId as string | undefined;
   if (!subscriptionId) return res.status(400).json({ error: "subscriptionId is required" });
   try {
-    const client = new ArmResourceGroupClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+    const { entraTenantId, tokenProvider } = await resolveArmAuth(tenantId);
+    const client = new ArmResourceGroupClient(entraTenantId, tokenProvider);
     const groups = await client.listResourceGroups(subscriptionId);
     res.json(groups);
   } catch (err) {
@@ -99,7 +101,6 @@ monitoredResourceGroupsRouter.put("/monitored/:subscriptionId", async (req, res)
  * endpoint deliberately does not attempt). */
 monitoredResourceGroupsRouter.post("/sync", async (req, res) => {
   const tenantId = (req as any).tenantId as string;
-  const entraTenantId = req.header("x-entra-tenant-id") || "unknown";
 
   const monitored = await withTenant(tenantId, async (client) => {
     const { rows } = await client.query(
@@ -109,7 +110,13 @@ monitoredResourceGroupsRouter.post("/sync", async (req, res) => {
     return rows;
   });
 
-  const armClient = new ArmHostPoolClient(entraTenantId, new FakeTokenProvider());
+  let armClient: ArmHostPoolClient;
+  try {
+    const { entraTenantId, tokenProvider } = await resolveArmAuth(tenantId);
+    armClient = new ArmHostPoolClient(entraTenantId, tokenProvider);
+  } catch (err) {
+    return res.status(502).json({ error: (err as Error).message, discovered: 0, imported: 0, errors: [] });
+  }
   let discovered = 0;
   let imported = 0;
   const errors: string[] = [];

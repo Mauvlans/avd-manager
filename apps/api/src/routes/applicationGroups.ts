@@ -2,7 +2,7 @@ import { Router } from "express";
 import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { ArmApplicationGroupClient } from "../services/armApplicationGroupClient";
-import { FakeTokenProvider } from "../services/tokenProvider";
+import { resolveArmAuth } from "../services/armAuthResolver";
 import { tenantAuth } from "../middleware/tenantAuth";
 
 /**
@@ -19,8 +19,9 @@ export const applicationGroupsRouter = Router();
 
 applicationGroupsRouter.use(tenantAuth);
 
-function buildClient(req: any): ArmApplicationGroupClient {
-  return new ArmApplicationGroupClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+function buildClient(req: any): Promise<ArmApplicationGroupClient> {
+  const tenantId = req.tenantId as string;
+  return resolveArmAuth(tenantId).then(({ entraTenantId, tokenProvider }) => new ArmApplicationGroupClient(entraTenantId, tokenProvider));
 }
 
 applicationGroupsRouter.get("/", async (req, res) => {
@@ -30,7 +31,7 @@ applicationGroupsRouter.get("/", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const groups = await client.listApplicationGroups(subscriptionId, resourceGroup);
     res.json(groups);
   } catch (err) {
@@ -45,7 +46,7 @@ applicationGroupsRouter.get("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const group = await client.getApplicationGroup(subscriptionId, resourceGroup, req.params.name);
     if (!group) return res.status(404).json({ error: "not found" });
     res.json(group);
@@ -64,7 +65,7 @@ applicationGroupsRouter.put("/:name", async (req, res) => {
     return res.status(400).json({ error: "hostPoolArmPath and applicationGroupType are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.createOrUpdateApplicationGroup(subscriptionId, resourceGroup, req.params.name, params);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {
@@ -94,7 +95,7 @@ applicationGroupsRouter.delete("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     await client.deleteApplicationGroup(subscriptionId, resourceGroup, req.params.name);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { ArmWorkspaceClient } from "../services/armWorkspaceClient";
-import { FakeTokenProvider } from "../services/tokenProvider";
+import { resolveArmAuth } from "../services/armAuthResolver";
 import { tenantAuth } from "../middleware/tenantAuth";
 
 /**
@@ -17,8 +17,10 @@ export const workspacesRouter = Router();
 
 workspacesRouter.use(tenantAuth);
 
-function buildClient(req: any): ArmWorkspaceClient {
-  return new ArmWorkspaceClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+async function buildClient(req: any): Promise<ArmWorkspaceClient> {
+  const tenantId = req.tenantId as string;
+  const { entraTenantId, tokenProvider } = await resolveArmAuth(tenantId);
+  return new ArmWorkspaceClient(entraTenantId, tokenProvider);
 }
 
 workspacesRouter.get("/", async (req, res) => {
@@ -28,7 +30,7 @@ workspacesRouter.get("/", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const workspaces = await client.listWorkspaces(subscriptionId, resourceGroup);
     res.json(workspaces);
   } catch (err) {
@@ -43,7 +45,7 @@ workspacesRouter.get("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const ws = await client.getWorkspace(subscriptionId, resourceGroup, req.params.name);
     if (!ws) return res.status(404).json({ error: "not found" });
     res.json(ws);
@@ -59,7 +61,7 @@ workspacesRouter.put("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.createOrUpdateWorkspace(subscriptionId, resourceGroup, req.params.name, {
       applicationGroupReferences: [],
       ...params,
@@ -92,7 +94,7 @@ workspacesRouter.delete("/:name", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId and resourceGroup are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     await client.deleteWorkspace(subscriptionId, resourceGroup, req.params.name);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {
@@ -118,7 +120,7 @@ workspacesRouter.post("/:name/attach", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId, resourceGroup, and applicationGroupArmPath are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.attachApplicationGroup(subscriptionId, resourceGroup, req.params.name, applicationGroupArmPath);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {
@@ -147,7 +149,7 @@ workspacesRouter.post("/:name/detach", async (req, res) => {
     return res.status(400).json({ error: "subscriptionId, resourceGroup, and applicationGroupArmPath are required" });
   }
   try {
-    const client = buildClient(req);
+    const client = await buildClient(req);
     const result = await client.detachApplicationGroup(subscriptionId, resourceGroup, req.params.name, applicationGroupArmPath);
     await withTenant(tenantId, async (dbClient) => {
       await writeAuditLog(dbClient, {

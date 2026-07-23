@@ -3,7 +3,7 @@ import { withTenant } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import type { HostPoolType, LoadBalancerType } from "@avd-manager/shared";
 import { ArmHostPoolClient, resolveVmNameFromResourceId } from "../services/armHostPoolClient";
-import { FakeTokenProvider } from "../services/tokenProvider";
+import { resolveArmAuth } from "../services/armAuthResolver";
 import { tenantAuth } from "../middleware/tenantAuth";
 
 export const hostPoolsRouter = Router();
@@ -61,15 +61,15 @@ hostPoolsRouter.post("/", async (req, res) => {
     return row;
   });
 
-  // Real ARM call — uses FakeTokenProvider in this sandbox since there's no
-  // live tenant with granted RBAC. Swap for ClientCredentialsArmTokenProvider
-  // in production. Now polls to a real terminal state (see
+  // Real ARM call using real client-credentials auth (resolveArmAuth) —
+  // Now polls to a real terminal state (see
   // armHostPoolClient.createOrUpdateHostPool) instead of trusting a bare
   // 202/201 Accepted; a failed/timed-out ARM outcome is surfaced in the
   // response as a warning (still not rolled back — see PROGRESS.md's
   // outbox/saga hardening follow-up for that).
   try {
-    const armClient = new ArmHostPoolClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
+    const { entraTenantId, tokenProvider } = await resolveArmAuth(tenantId);
+    const armClient = new ArmHostPoolClient(entraTenantId, tokenProvider);
     const result = await armClient.createOrUpdateHostPool(subscriptionId, resourceGroup, name, {
       location,
       hostPoolType: hostPoolType as HostPoolType,
@@ -86,7 +86,7 @@ hostPoolsRouter.post("/", async (req, res) => {
   } catch (err) {
     return res.status(202).json({
       ...created,
-      warning: `DB record created but ARM call failed (expected in this sandbox without live Azure creds): ${(err as Error).message}`,
+      warning: `DB record created but ARM call failed: ${(err as Error).message}`,
     });
   }
 
@@ -128,9 +128,14 @@ hostPoolsRouter.get("/:id/session-hosts", async (req, res) => {
   });
   if (!pool) return res.status(404).json({ error: "not found" });
 
-  const armClient = new ArmHostPoolClient(req.header("x-entra-tenant-id") || "unknown", new FakeTokenProvider());
-  const hosts = await armClient.listSessionHosts(pool.subscription_id, pool.resource_group, pool.name);
-  res.json(hosts);
+  try {
+    const { entraTenantId, tokenProvider } = await resolveArmAuth(tenantId);
+    const armClient = new ArmHostPoolClient(entraTenantId, tokenProvider);
+    const hosts = await armClient.listSessionHosts(pool.subscription_id, pool.resource_group, pool.name);
+    res.json(hosts);
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
 });
 
 async function loadHostPoolAndHost(tenantId: string, hostPoolId: string, sessionHostName: string) {
@@ -139,7 +144,8 @@ async function loadHostPoolAndHost(tenantId: string, hostPoolId: string, session
     return rows[0] ?? null;
   });
   if (!pool) return { pool: null, host: null };
-  const armClient = new ArmHostPoolClient(pool.tenant_id, new FakeTokenProvider());
+  const { entraTenantId, tokenProvider } = await resolveArmAuth(pool.tenant_id);
+  const armClient = new ArmHostPoolClient(entraTenantId, tokenProvider);
   const hosts = await armClient.listSessionHosts(pool.subscription_id, pool.resource_group, pool.name);
   const host = hosts.find((h) => h.name === sessionHostName) ?? null;
   return { pool, host, armClient };
