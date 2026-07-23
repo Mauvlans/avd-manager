@@ -1,11 +1,11 @@
-/* Theme: Supabase — per Adam's pick after reviewing 3 real mockups
-   (Linear/Vercel/Supabase) at /tmp/theme-mockups/. Same CSS-variable
-   mechanism as before (light :root / dark .dark class on <html>), just
-   swapped to Supabase's actual palette: near-black backgrounds, emerald
-   green (#3ecf8e/#00c573) as the single brand accent, pill-shaped
-   buttons/badges (9999px radius) for primary actions, border-based depth
-   instead of shadows. Verified against the real mockup screenshots
-   before porting (not guessed at from the design doc alone). */
+/* Theme: Supabase layout/mechanics + mauve brand accent (Adam's request:
+   swap the green for mauve, since the company is Mauvlan). Same
+   CSS-variable mechanism as before (light :root / dark .dark class on
+   <html>), Supabase's near-black backgrounds / pill-shaped buttons and
+   badges / border-based depth all kept — only the --primary/--ring/
+   --sidebar-primary/--sidebar-ring hue changed from emerald green to
+   mauve (~322° hue, muted pink-purple). --success stays green since
+   that's a semantic status color, not the brand accent. */
 :root {
   --background: 0 0% 98%;
   --foreground: 0 0% 9%;
@@ -13,8 +13,8 @@
   --card-foreground: 0 0% 9%;
   --popover: 0 0% 100%;
   --popover-foreground: 0 0% 9%;
-  --primary: 156 61% 46%;
-  --primary-foreground: 0 0% 6%;
+  --primary: 322 25% 52%;
+  --primary-foreground: 0 0% 98%;
   --secondary: 0 0% 96%;
   --secondary-foreground: 0 0% 9%;
   --muted: 0 0% 96%;
@@ -25,17 +25,17 @@
   --destructive-foreground: 0 0% 98%;
   --border: 0 0% 94%;
   --input: 0 0% 94%;
-  --ring: 156 61% 46%;
+  --ring: 322 25% 52%;
   --radius: 0.75rem;
 
   --sidebar-background: 0 0% 9%;
   --sidebar-foreground: 0 0% 71%;
-  --sidebar-primary: 156 61% 46%;
+  --sidebar-primary: 322 25% 62%;
   --sidebar-primary-foreground: 0 0% 6%;
   --sidebar-accent: 0 0% 18%;
   --sidebar-accent-foreground: 0 0% 98%;
   --sidebar-border: 0 0% 18%;
-  --sidebar-ring: 156 61% 46%;
+  --sidebar-ring: 322 25% 62%;
 
   --success: 156 61% 40%;
   --success-bg: 156 50% 92%;
@@ -52,8 +52,8 @@
   --card-foreground: 0 0% 98%;
   --popover: 0 0% 9%;
   --popover-foreground: 0 0% 98%;
-  --primary: 156 61% 55%;
-  --primary-foreground: 0 0% 6%;
+  --primary: 322 30% 68%;
+  --primary-foreground: 0 0% 9%;
   --secondary: 0 0% 15%;
   --secondary-foreground: 0 0% 98%;
   --muted: 0 0% 15%;
@@ -64,16 +64,16 @@
   --destructive-foreground: 0 0% 98%;
   --border: 0 0% 18%;
   --input: 0 0% 18%;
-  --ring: 156 61% 55%;
+  --ring: 322 30% 68%;
 
   --sidebar-background: 0 0% 6%;
   --sidebar-foreground: 0 0% 71%;
-  --sidebar-primary: 156 61% 55%;
-  --sidebar-primary-foreground: 0 0% 6%;
+  --sidebar-primary: 322 30% 68%;
+  --sidebar-primary-foreground: 0 0% 9%;
   --sidebar-accent: 0 0% 12%;
   --sidebar-accent-foreground: 0 0% 98%;
   --sidebar-border: 0 0% 18%;
-  --sidebar-ring: 156 61% 55%;
+  --sidebar-ring: 322 30% 68%;
 
   --success: 156 61% 55%;
   --success-bg: 156 40% 15%;
