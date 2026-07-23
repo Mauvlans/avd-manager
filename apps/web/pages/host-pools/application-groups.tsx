@@ -182,7 +182,13 @@ export default function ApplicationGroups() {
           <tbody>
             {groups.map((g) => (
               <tr key={g.id}>
-                <td>{g.friendlyName || g.name}</td>
+                <td>
+                  <a
+                    href={`/host-pools/application-group-detail?name=${encodeURIComponent(g.name)}&subscriptionId=${encodeURIComponent(g.subscriptionId)}&resourceGroup=${encodeURIComponent(g.resourceGroup)}`}
+                  >
+                    {g.friendlyName || g.name}
+                  </a>
+                </td>
                 <td>{g.resourceGroup}</td>
                 <td>{subscriptionNames[g.subscriptionId] ?? g.subscriptionId}</td>
                 <td>{g.applicationGroupType}</td>
