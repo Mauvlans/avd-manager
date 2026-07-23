@@ -5,10 +5,16 @@ import {
   deleteApplicationGroup,
   listApplicationGroups,
   listHostPools,
+  getOnboardingRegistry,
 } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
 import HostPoolsLayout from "../../components/HostPoolsLayout";
 import SidePanel from "../../components/SidePanel";
+
+interface ApplicationGroupTableRow extends ApplicationGroupRow {
+  subscriptionId: string;
+  resourceGroup: string;
+}
 
 /**
  * Application Groups — real Azure AVD Application Groups
@@ -16,19 +22,23 @@ import SidePanel from "../../components/SidePanel";
  * ARM wrappers. Part of the Host Pools L2 tab experience per Adam's mock.
  * No local DB table — ARM is the sole source of truth.
  *
- * Rebuilt per Adam's explicit ask ("add a table to Application Groups to
- * mirror host pool with a create button") to match Host Pools'
- * (pages/host-pools/index.tsx) exact pattern: a "+ Create" button that
- * opens a SidePanel (Deploy > Template's right-side slide-out blade
- * style) instead of an inline toggle form, table styling identical to
- * Host Pools' table.
+ * Per Adam's explicit ask ("Host Pools under application groups need to
+ * look like host pools table and should not have a dropdown for resource
+ * group but both resource group and subscription should be in the
+ * table"): removed the scope-selector dropdown entirely. Instead, mirrors
+ * Host Pools' index page pattern exactly — automatically discovers every
+ * distinct (subscription, resourceGroup) scope from the tenant's existing
+ * host pools (application groups only exist scoped to a host pool, so
+ * this is the same real scope discovery Host Pools' app-group-count
+ * column already uses), fetches application groups across ALL of them,
+ * and shows Subscription and Resource Group as real table columns rather
+ * than a filter the admin has to pick before seeing anything.
  */
 export default function ApplicationGroups() {
   const [tenantId] = useTenantId();
-  const [subscriptionId, setSubscriptionId] = useState("");
-  const [resourceGroup, setResourceGroup] = useState("");
+  const [groups, setGroups] = useState<ApplicationGroupTableRow[]>([]);
+  const [subscriptionNames, setSubscriptionNames] = useState<Record<string, string>>({});
   const [knownScopes, setKnownScopes] = useState<{ subscriptionId: string; resourceGroup: string }[]>([]);
-  const [groups, setGroups] = useState<ApplicationGroupRow[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -39,43 +49,49 @@ export default function ApplicationGroups() {
     friendlyName: "",
     hostPoolArmPath: "",
     applicationGroupType: "Desktop" as "Desktop" | "RemoteApp",
+    subscriptionId: "",
+    resourceGroup: "",
   });
 
-  // Default Subscription ID / Resource Group from the tenant's existing
-  // host pools (same scope application groups actually live in) instead
-  // of requiring manual entry — see the earlier fix for the "table
-  // appears empty" bug.
-  useEffect(() => {
-    if (!tenantId) return;
-    listHostPools(tenantId)
-      .then((pools) => {
-        const seen = new Set<string>();
-        const scopes = pools
-          .map((p) => ({ subscriptionId: p.subscription_id, resourceGroup: p.resource_group }))
-          .filter((s) => {
-            const key = `${s.subscriptionId}/${s.resourceGroup}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        setKnownScopes(scopes);
-        if (scopes.length > 0 && !subscriptionId && !resourceGroup) {
-          setSubscriptionId(scopes[0].subscriptionId);
-          setResourceGroup(scopes[0].resourceGroup);
-        }
-      })
-      .catch(() => {
-        /* non-fatal — falls back to manual entry below */
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]);
-
   async function refresh() {
-    if (!tenantId || !subscriptionId || !resourceGroup) return;
+    if (!tenantId) return;
     setLoading(true);
     setError("");
     try {
-      setGroups(await listApplicationGroups(tenantId, subscriptionId, resourceGroup));
+      const [pools, registryRows] = await Promise.all([listHostPools(tenantId), getOnboardingRegistry(tenantId)]);
+
+      const names: Record<string, string> = {};
+      for (const r of registryRows) {
+        if (r.subscription_id) names[r.subscription_id] = r.subscription_display_name || r.subscription_id;
+      }
+      setSubscriptionNames(names);
+
+      const seen = new Set<string>();
+      const scopes = pools
+        .map((p) => ({ subscriptionId: p.subscription_id, resourceGroup: p.resource_group }))
+        .filter((s) => {
+          const key = `${s.subscriptionId}/${s.resourceGroup}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      setKnownScopes(scopes);
+
+      const allGroups: ApplicationGroupTableRow[] = [];
+      await Promise.all(
+        scopes.map(async (scope) => {
+          try {
+            const scoped = await listApplicationGroups(tenantId, scope.subscriptionId, scope.resourceGroup);
+            for (const g of scoped) {
+              allGroups.push({ ...g, subscriptionId: scope.subscriptionId, resourceGroup: scope.resourceGroup });
+            }
+          } catch {
+            // Non-fatal — a scope with no RBAC yet shouldn't blank the
+            // whole table; other scopes' groups still render.
+          }
+        })
+      );
+      setGroups(allGroups);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -86,7 +102,7 @@ export default function ApplicationGroups() {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId, subscriptionId, resourceGroup]);
+  }, [tenantId]);
 
   function openCreatePanel() {
     setForm({
@@ -95,6 +111,8 @@ export default function ApplicationGroups() {
       friendlyName: "",
       hostPoolArmPath: "",
       applicationGroupType: "Desktop",
+      subscriptionId: knownScopes[0]?.subscriptionId ?? "",
+      resourceGroup: knownScopes[0]?.resourceGroup ?? "",
     });
     setError("");
     setPanelOpen(true);
@@ -104,8 +122,8 @@ export default function ApplicationGroups() {
     setError("");
     try {
       await createOrUpdateApplicationGroup(tenantId, form.name, {
-        subscriptionId,
-        resourceGroup,
+        subscriptionId: form.subscriptionId,
+        resourceGroup: form.resourceGroup,
         location: form.location,
         friendlyName: form.friendlyName || undefined,
         hostPoolArmPath: form.hostPoolArmPath,
@@ -118,10 +136,10 @@ export default function ApplicationGroups() {
     }
   }
 
-  async function handleDelete(name: string) {
+  async function handleDelete(row: ApplicationGroupTableRow) {
     setError("");
     try {
-      await deleteApplicationGroup(tenantId, name, subscriptionId, resourceGroup);
+      await deleteApplicationGroup(tenantId, row.name, row.subscriptionId, row.resourceGroup);
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -140,50 +158,21 @@ export default function ApplicationGroups() {
     <HostPoolsLayout>
       {error && <p className="err">{error}</p>}
 
-      <div className="card">
-        {knownScopes.length > 0 && (
-          <>
-            <label>Subscription / Resource Group</label>
-            <select
-              value={`${subscriptionId}/${resourceGroup}`}
-              onChange={(e) => {
-                const [sub, rg] = e.target.value.split("/");
-                setSubscriptionId(sub);
-                setResourceGroup(rg);
-              }}
-            >
-              {knownScopes.map((s) => (
-                <option key={`${s.subscriptionId}/${s.resourceGroup}`} value={`${s.subscriptionId}/${s.resourceGroup}`}>
-                  {s.resourceGroup} ({s.subscriptionId})
-                </option>
-              ))}
-              <option value="/">Other (enter manually)…</option>
-            </select>
-          </>
-        )}
-        {(knownScopes.length === 0 || subscriptionId === "") && (
-          <>
-            <label>Subscription ID</label>
-            <input value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)} />
-            <label>Resource group</label>
-            <input value={resourceGroup} onChange={(e) => setResourceGroup(e.target.value)} />
-          </>
-        )}
-      </div>
-
-      <button onClick={openCreatePanel} disabled={!subscriptionId || !resourceGroup}>
+      <button onClick={openCreatePanel} disabled={knownScopes.length === 0}>
         + Create
       </button>
 
       {loading ? (
         <p>Loading…</p>
       ) : groups.length === 0 ? (
-        <p>No application groups found for this subscription/resource group.</p>
+        <p>No application groups found. {knownScopes.length === 0 && "Create a host pool first."}</p>
       ) : (
         <table style={{ marginTop: 16 }}>
           <thead>
             <tr>
               <th>Name</th>
+              <th>Resource Group</th>
+              <th>Subscription</th>
               <th>Type</th>
               <th>Host pool</th>
               <th>Published to workspace</th>
@@ -194,11 +183,13 @@ export default function ApplicationGroups() {
             {groups.map((g) => (
               <tr key={g.id}>
                 <td>{g.friendlyName || g.name}</td>
+                <td>{g.resourceGroup}</td>
+                <td>{subscriptionNames[g.subscriptionId] ?? g.subscriptionId}</td>
                 <td>{g.applicationGroupType}</td>
                 <td>{g.hostPoolArmPath.split("/").pop()}</td>
                 <td>{g.workspaceArmPath ? g.workspaceArmPath.split("/").pop() : "—"}</td>
                 <td>
-                  <button className="secondary" onClick={() => handleDelete(g.name)}>
+                  <button className="secondary" onClick={() => handleDelete(g)}>
                     Delete
                   </button>
                 </td>
@@ -214,6 +205,25 @@ export default function ApplicationGroups() {
           whole-desktop group ("Desktop") or a RemoteApp-publishing group ("RemoteApp"), which must be
           compatible with the host pool's own preferred app group type.
         </p>
+
+        <label>Subscription / Resource Group</label>
+        {knownScopes.length > 0 ? (
+          <select
+            value={`${form.subscriptionId}/${form.resourceGroup}`}
+            onChange={(e) => {
+              const [sub, rg] = e.target.value.split("/");
+              setForm({ ...form, subscriptionId: sub, resourceGroup: rg });
+            }}
+          >
+            {knownScopes.map((s) => (
+              <option key={`${s.subscriptionId}/${s.resourceGroup}`} value={`${s.subscriptionId}/${s.resourceGroup}`}>
+                {s.resourceGroup} ({subscriptionNames[s.subscriptionId] ?? s.subscriptionId})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p className="warn" style={{ marginTop: 0 }}>No host pools yet — create one first via Deploy.</p>
+        )}
 
         <label>Name</label>
         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -241,7 +251,7 @@ export default function ApplicationGroups() {
         </select>
 
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button onClick={handleCreate} disabled={!form.name || !form.hostPoolArmPath}>
+          <button onClick={handleCreate} disabled={!form.name || !form.hostPoolArmPath || !form.subscriptionId}>
             Create
           </button>
           <button className="secondary" onClick={() => setPanelOpen(false)}>
