@@ -282,6 +282,137 @@ export function detachScalingPlanFromHostPool(
   });
 }
 
+// --- Application Groups (apps/api/src/routes/applicationGroups.ts) — thin
+// wrappers over real Azure AVD Application Groups
+// (Microsoft.DesktopVirtualization/applicationGroups). No local DB table;
+// ARM is the sole source of truth, matching scaling plans' precedent. ---
+
+export type ApplicationGroupType = "Desktop" | "RemoteApp";
+
+export interface ApplicationGroupRow {
+  id: string;
+  name: string;
+  location: string;
+  friendlyName?: string;
+  description?: string;
+  hostPoolArmPath: string;
+  applicationGroupType: ApplicationGroupType;
+  workspaceArmPath?: string | null;
+}
+
+export function listApplicationGroups(tenantId: string, subscriptionId: string, resourceGroup: string) {
+  return request<ApplicationGroupRow[]>("/api/application-groups", { tenantId, query: { subscriptionId, resourceGroup } });
+}
+
+export function getApplicationGroup(tenantId: string, subscriptionId: string, resourceGroup: string, name: string) {
+  return request<ApplicationGroupRow>(`/api/application-groups/${encodeURIComponent(name)}`, {
+    tenantId,
+    query: { subscriptionId, resourceGroup },
+  });
+}
+
+export function createOrUpdateApplicationGroup(
+  tenantId: string,
+  name: string,
+  input: {
+    subscriptionId: string;
+    resourceGroup: string;
+    location: string;
+    friendlyName?: string;
+    description?: string;
+    hostPoolArmPath: string;
+    applicationGroupType: ApplicationGroupType;
+  }
+) {
+  return request<ApplicationGroupRow>(`/api/application-groups/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "PUT",
+    body: input,
+  });
+}
+
+export function deleteApplicationGroup(tenantId: string, name: string, subscriptionId: string, resourceGroup: string) {
+  return request<void>(`/api/application-groups/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "DELETE",
+    query: { subscriptionId, resourceGroup },
+  });
+}
+
+// --- Workspaces (apps/api/src/routes/workspaces.ts) — thin wrappers over
+// real Azure AVD Workspaces (Microsoft.DesktopVirtualization/workspaces).
+// No local DB table; ARM is the sole source of truth. ---
+
+export interface WorkspaceRow {
+  id: string;
+  name: string;
+  location: string;
+  friendlyName?: string;
+  description?: string;
+  applicationGroupReferences: string[];
+}
+
+export function listWorkspaces(tenantId: string, subscriptionId: string, resourceGroup: string) {
+  return request<WorkspaceRow[]>("/api/workspaces", { tenantId, query: { subscriptionId, resourceGroup } });
+}
+
+export function getWorkspace(tenantId: string, subscriptionId: string, resourceGroup: string, name: string) {
+  return request<WorkspaceRow>(`/api/workspaces/${encodeURIComponent(name)}`, {
+    tenantId,
+    query: { subscriptionId, resourceGroup },
+  });
+}
+
+export function createOrUpdateWorkspace(
+  tenantId: string,
+  name: string,
+  input: {
+    subscriptionId: string;
+    resourceGroup: string;
+    location: string;
+    friendlyName?: string;
+    description?: string;
+  }
+) {
+  return request<WorkspaceRow>(`/api/workspaces/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "PUT",
+    body: input,
+  });
+}
+
+export function deleteWorkspace(tenantId: string, name: string, subscriptionId: string, resourceGroup: string) {
+  return request<void>(`/api/workspaces/${encodeURIComponent(name)}`, {
+    tenantId,
+    method: "DELETE",
+    query: { subscriptionId, resourceGroup },
+  });
+}
+
+export function attachApplicationGroupToWorkspace(
+  tenantId: string,
+  name: string,
+  input: { subscriptionId: string; resourceGroup: string; applicationGroupArmPath: string }
+) {
+  return request<WorkspaceRow>(`/api/workspaces/${encodeURIComponent(name)}/attach`, {
+    tenantId,
+    method: "POST",
+    body: input,
+  });
+}
+
+export function detachApplicationGroupFromWorkspace(
+  tenantId: string,
+  name: string,
+  input: { subscriptionId: string; resourceGroup: string; applicationGroupArmPath: string }
+) {
+  return request<WorkspaceRow>(`/api/workspaces/${encodeURIComponent(name)}/detach`, {
+    tenantId,
+    method: "POST",
+    body: input,
+  });
+}
+
 // --- Cost estimation (apps/api/src/routes/cost.ts, public retail prices) ---
 
 export interface CostEstimateResponse {

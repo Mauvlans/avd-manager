@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { deleteHostPool, listHostPools, HostPoolRow } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
+import HostPoolsLayout from "../../components/HostPoolsLayout";
 
 /**
  * Host Pools — list/manage existing host pools. Creation now happens
@@ -48,16 +49,14 @@ export default function HostPools() {
 
   if (!tenantId) {
     return (
-      <div>
-        <h1>Host Pools</h1>
+      <HostPoolsLayout>
         <p className="warn">No tenant selected. Complete <a href="/onboarding">Onboarding</a> first.</p>
-      </div>
+      </HostPoolsLayout>
     );
   }
 
   return (
-    <div>
-      <h1>Host Pools</h1>
+    <HostPoolsLayout>
       <p>Tenant: <span className="mono">{tenantId}</span></p>
       {error && <p className="err">{error}</p>}
 
@@ -103,6 +102,6 @@ export default function HostPools() {
           </tbody>
         </table>
       )}
-    </div>
+    </HostPoolsLayout>
   );
 }

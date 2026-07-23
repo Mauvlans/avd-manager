@@ -9,6 +9,7 @@ import {
   startSessionHost,
 } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
+import HostPoolsLayout from "../../components/HostPoolsLayout";
 
 /**
  * Scaling-policy CRUD used to live on this page (custom engine, retired —
@@ -78,12 +79,12 @@ export default function HostPoolDetail() {
     }
   }
 
-  if (!tenantId) return <p className="warn">No tenant selected. Complete onboarding first.</p>;
-  if (!pool) return <p>Loading…</p>;
+  if (!tenantId) return <HostPoolsLayout><p className="warn">No tenant selected. Complete onboarding first.</p></HostPoolsLayout>;
+  if (!pool) return <HostPoolsLayout><p>Loading…</p></HostPoolsLayout>;
 
   return (
-    <div>
-      <h1>{pool.name}</h1>
+    <HostPoolsLayout>
+      <h2 style={{ marginTop: 0 }}>{pool.name}</h2>
       {error && <p className="err">{error}</p>}
       <div className="card">
         <p><strong>Subscription:</strong> <span className="mono">{pool.subscription_id}</span></p>
@@ -155,6 +156,6 @@ export default function HostPoolDetail() {
         a plan to this host pool (subscription: <span className="mono">{pool.subscription_id}</span>,
         resource group: {pool.resource_group}).
       </p>
-    </div>
+    </HostPoolsLayout>
   );
 }
