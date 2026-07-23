@@ -96,6 +96,7 @@ export default function Deploy() {
   const [name, setName] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
   const [knownSubscriptionIds, setKnownSubscriptionIds] = useState<string[]>([]);
+  const [subscriptionNames, setSubscriptionNames] = useState<Record<string, string>>({});
   const [availableRegions, setAvailableRegions] = useState<{ value: string; label: string }[]>([]);
   const [resourceGroup, setResourceGroup] = useState("");
   const [location, setLocation] = useState("eastus");
@@ -132,6 +133,12 @@ export default function Deploy() {
         return true;
       });
       setKnownSubscriptionIds(ordered);
+
+      const names: Record<string, string> = {};
+      for (const r of registryRows) {
+        if (r.subscription_id) names[r.subscription_id] = r.subscription_display_name || r.subscription_id;
+      }
+      setSubscriptionNames(names);
     });
   }, [tenantId]);
 
@@ -252,7 +259,7 @@ export default function Deploy() {
             <select value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)}>
               {knownSubscriptionIds.map((id) => (
                 <option key={id} value={id}>
-                  {id}
+                  {subscriptionNames[id] ?? id}
                 </option>
               ))}
               <option value="">Other (enter manually)…</option>

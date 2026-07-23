@@ -25,6 +25,7 @@ import { useTenantId } from "../../lib/useTenantId";
 export default function MonitoredResourceGroups() {
   const [tenantId] = useTenantId();
   const [subscriptionIds, setSubscriptionIds] = useState<string[]>([]);
+  const [subscriptionNames, setSubscriptionNames] = useState<Record<string, string>>({});
   const [activeSubscriptionId, setActiveSubscriptionId] = useState("");
   const [azureGroups, setAzureGroups] = useState<ResourceGroupSummary[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -41,6 +42,11 @@ export default function MonitoredResourceGroups() {
       .then((rows) => {
         const ids = Array.from(new Set(rows.filter((r) => r.subscription_id).map((r) => r.subscription_id as string)));
         setSubscriptionIds(ids);
+        const names: Record<string, string> = {};
+        for (const r of rows) {
+          if (r.subscription_id) names[r.subscription_id] = r.subscription_display_name || r.subscription_id;
+        }
+        setSubscriptionNames(names);
         if (ids.length > 0) setActiveSubscriptionId(ids[0]);
       })
       .catch((err) => setError((err as Error).message));
@@ -133,7 +139,7 @@ export default function MonitoredResourceGroups() {
         <select value={activeSubscriptionId} onChange={(e) => setActiveSubscriptionId(e.target.value)}>
           {subscriptionIds.map((id) => (
             <option key={id} value={id}>
-              {id}
+              {subscriptionNames[id] ?? id}
             </option>
           ))}
         </select>
