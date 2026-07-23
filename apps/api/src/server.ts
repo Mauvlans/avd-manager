@@ -13,6 +13,7 @@ import { serviceVariablesRouter } from "./routes/serviceVariables";
 import { customTemplatesRouter } from "./routes/customTemplates";
 import { monitoredResourceGroupsRouter } from "./routes/monitoredResourceGroups";
 import { resourcesRouter } from "./routes/resources";
+import { costFactsRouter } from "./routes/costFacts";
 
 const app = express();
 app.use(cors());
@@ -49,6 +50,7 @@ app.use("/api/service-variables", serviceVariablesRouter);
 app.use("/api/custom-templates", customTemplatesRouter);
 app.use("/api/monitored-resource-groups", monitoredResourceGroupsRouter);
 app.use("/api/resources", resourcesRouter);
+app.use("/api/cost-facts", costFactsRouter);
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {

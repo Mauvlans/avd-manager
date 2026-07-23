@@ -58,6 +58,18 @@ resource avdManagerCustomRole 'Microsoft.Authorization/roleDefinitions@2022-04-0
           // grant at all (a real chicken-and-egg gap in the original
           // least-privilege role, not a bug in the verifier code itself).
           'Microsoft.Authorization/roleAssignments/read'
+          // Needed for the Cost Optimization platform's Phase 2 cost
+          // ingestion (armCostManagementClient.ts) — Microsoft.CostManagement's
+          // query API. Found to be missing live: the very first real cost
+          // ingestion attempt against Adam's subscription failed with a
+          // genuine 401 RBACAccessDenied, because the role as originally
+          // scoped had no Cost Management permissions at all (matches the
+          // Cost Optimization plan's own § 3.1 guidance that Cost
+          // Management Reader is a SEPARATE recommended role from the AVD
+          // management ones — this was never granted). query/action is the
+          // read-only action needed to call the Query API; it does not
+          // grant any ability to modify billing/cost configuration.
+          'Microsoft.CostManagement/query/action'
         ]
         notActions: []
         dataActions: []
