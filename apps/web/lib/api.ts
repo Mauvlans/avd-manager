@@ -479,6 +479,59 @@ export function syncMonitoredResourceGroups(tenantId: string) {
   });
 }
 
+// --- Cost Optimization: resource inventory (apps/api/src/routes/resources.ts) ---
+
+export interface ResourceRow {
+  id: string;
+  tenant_id: string;
+  subscription_id: string;
+  azure_resource_id: string;
+  resource_type: string;
+  resource_name: string;
+  resource_group: string | null;
+  location: string | null;
+  sku: unknown;
+  tags: Record<string, string>;
+  properties: unknown;
+  first_seen_at: string;
+  last_seen_at: string;
+  deleted_at: string | null;
+}
+
+export interface ResourceTypeSummary {
+  resource_type: string;
+  count: string;
+}
+
+export interface CollectionRunRow {
+  id: string;
+  collector_type: string;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  record_count: number | null;
+  error_details: unknown;
+}
+
+export function triggerResourceCollection(tenantId: string, subscriptionIds?: string[]) {
+  return request<{ collectionRunId: string; discovered: number; inserted: number; updated: number; softDeleted: number }>(
+    "/api/resources/collect",
+    { tenantId, method: "POST", body: subscriptionIds ? { subscriptionIds } : {} }
+  );
+}
+
+export function listResources(tenantId: string, filters?: { resourceType?: string; subscriptionId?: string }) {
+  return request<ResourceRow[]>("/api/resources", { tenantId, query: filters as Record<string, string> });
+}
+
+export function getResourceSummary(tenantId: string) {
+  return request<ResourceTypeSummary[]>("/api/resources/summary", { tenantId });
+}
+
+export function listCollectionRuns(tenantId: string) {
+  return request<CollectionRunRow[]>("/api/resources/collection-runs", { tenantId });
+}
+
 export function uploadCustomTemplate(tenantId: string, file: File) {
   const form = new FormData();
   form.append("file", file);

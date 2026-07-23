@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { href: "/host-pools", label: "Host Pools" },
   { href: "/scaling-plans", label: "Scaling Plans" },
   { href: "/cost", label: "Cost" },
+  { href: "/cost-optimization", label: "Cost Optimization" },
   { href: "/audit-log", label: "Audit Log" },
   { href: "/settings", label: "Settings" },
 ];
