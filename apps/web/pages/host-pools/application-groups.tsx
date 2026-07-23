@@ -4,6 +4,7 @@ import {
   createOrUpdateApplicationGroup,
   deleteApplicationGroup,
   listApplicationGroups,
+  listHostPools,
 } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
 import HostPoolsLayout from "../../components/HostPoolsLayout";
@@ -20,6 +21,7 @@ export default function ApplicationGroups() {
   const [tenantId] = useTenantId();
   const [subscriptionId, setSubscriptionId] = useState("");
   const [resourceGroup, setResourceGroup] = useState("");
+  const [knownScopes, setKnownScopes] = useState<{ subscriptionId: string; resourceGroup: string }[]>([]);
   const [groups, setGroups] = useState<ApplicationGroupRow[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -32,6 +34,38 @@ export default function ApplicationGroups() {
     hostPoolArmPath: "",
     applicationGroupType: "Desktop" as "Desktop" | "RemoteApp",
   });
+
+  // Adam reported the table appeared empty on this page — root cause: it
+  // required Subscription ID + Resource Group to be typed in manually
+  // before it would even attempt to load anything, with no way to
+  // discover what to type. Default both from the tenant's existing host
+  // pools (same subscription/resource-group scope application groups
+  // actually live in), de-duplicated, so the page shows real data
+  // immediately instead of a blank table with two empty required fields.
+  useEffect(() => {
+    if (!tenantId) return;
+    listHostPools(tenantId)
+      .then((pools) => {
+        const seen = new Set<string>();
+        const scopes = pools
+          .map((p) => ({ subscriptionId: p.subscription_id, resourceGroup: p.resource_group }))
+          .filter((s) => {
+            const key = `${s.subscriptionId}/${s.resourceGroup}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        setKnownScopes(scopes);
+        if (scopes.length > 0 && !subscriptionId && !resourceGroup) {
+          setSubscriptionId(scopes[0].subscriptionId);
+          setResourceGroup(scopes[0].resourceGroup);
+        }
+      })
+      .catch(() => {
+        /* non-fatal — falls back to manual entry below */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
 
   async function refresh() {
     if (!tenantId || !subscriptionId || !resourceGroup) return;
@@ -99,10 +133,34 @@ export default function ApplicationGroups() {
       <p>Tenant: <span className="mono">{tenantId}</span></p>
 
       <div className="card">
-        <label>Subscription ID</label>
-        <input value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)} />
-        <label>Resource group</label>
-        <input value={resourceGroup} onChange={(e) => setResourceGroup(e.target.value)} />
+        {knownScopes.length > 0 && (
+          <>
+            <label>Subscription / Resource Group (from your existing host pools)</label>
+            <select
+              value={`${subscriptionId}/${resourceGroup}`}
+              onChange={(e) => {
+                const [sub, rg] = e.target.value.split("/");
+                setSubscriptionId(sub);
+                setResourceGroup(rg);
+              }}
+            >
+              {knownScopes.map((s) => (
+                <option key={`${s.subscriptionId}/${s.resourceGroup}`} value={`${s.subscriptionId}/${s.resourceGroup}`}>
+                  {s.resourceGroup} ({s.subscriptionId})
+                </option>
+              ))}
+              <option value="/">Other (enter manually)…</option>
+            </select>
+          </>
+        )}
+        {(knownScopes.length === 0 || subscriptionId === "") && (
+          <>
+            <label>Subscription ID</label>
+            <input value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)} />
+            <label>Resource group</label>
+            <input value={resourceGroup} onChange={(e) => setResourceGroup(e.target.value)} />
+          </>
+        )}
       </div>
 
       {error && <p className="err">{error}</p>}

@@ -70,6 +70,7 @@ export interface SubscriptionsRegistryRow {
   id: string;
   tenant_id: string;
   subscription_id: string | null;
+  subscription_display_name: string | null;
   resource_groups: string[];
   rbac_role_definition_id: string | null;
   rbac_grant_status: "not_requested" | "pending" | "granted" | "drifted" | "revoked";

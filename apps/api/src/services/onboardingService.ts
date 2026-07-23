@@ -4,6 +4,7 @@ import { withTenant, withSystem } from "../db/pool";
 import { writeAuditLog } from "../lib/auditLog";
 import { buildAdminConsentUrl, GraphClient } from "../services/graphClient";
 import { acquireClientCredentialsToken } from "../services/tokenProvider";
+import { ArmSubscriptionInfoClient } from "../services/armSubscriptionInfoClient";
 
 /**
  * Onboarding service: generates the Graph admin-consent link and
@@ -203,6 +204,36 @@ export class OnboardingService {
     roleDefinitionId: string,
     resourceGroups: string[]
   ): Promise<void> {
+    // Best-effort: resolve the subscription's real displayName via ARM
+    // (e.g. "MSFT - External Sub - Mauvlan") so the Host Pools table can
+    // show a human-readable label instead of a raw GUID, per Adam's Host
+    // Pools mock. Soft failure — if this lookup fails (no client secret
+    // configured yet, transient ARM error, etc.) the RBAC grant itself
+    // still gets recorded; the UI falls back to the raw subscription id.
+    let subscriptionDisplayName: string | null = null;
+    if (this.appClientSecret) {
+      try {
+        const tenantRow = await withSystem(async (client) => {
+          const { rows } = await client.query(`SELECT entra_tenant_id FROM tenants WHERE id = $1`, [tenantId]);
+          return rows[0] ?? null;
+        });
+        if (tenantRow?.entra_tenant_id) {
+          const token = await acquireClientCredentialsToken(
+            tenantRow.entra_tenant_id,
+            this.appClientId,
+            this.appClientSecret,
+            "https://management.azure.com/.default"
+          );
+          const infoClient = new ArmSubscriptionInfoClient(tenantRow.entra_tenant_id, {
+            getArmToken: async () => token,
+          });
+          subscriptionDisplayName = await infoClient.getDisplayName(subscriptionId);
+        }
+      } catch {
+        subscriptionDisplayName = null;
+      }
+    }
+
     await withTenant(tenantId, async (client) => {
       const pending = await this.getPendingRegistryRow(client, tenantId);
       const before = pending ?? (await this.getRegistryRow(client, tenantId, subscriptionId));
@@ -211,17 +242,19 @@ export class OnboardingService {
         await client.query(
           `UPDATE subscriptions_registry
            SET subscription_id = $2, resource_groups = $3, rbac_role_definition_id = $4,
-               rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now()
+               rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now(),
+               subscription_display_name = COALESCE($5, subscription_display_name)
            WHERE id = $1`,
-          [pending.id, subscriptionId, resourceGroups, roleDefinitionId]
+          [pending.id, subscriptionId, resourceGroups, roleDefinitionId, subscriptionDisplayName]
         );
       } else {
         await client.query(
-          `INSERT INTO subscriptions_registry (tenant_id, subscription_id, resource_groups, rbac_role_definition_id, rbac_grant_status, rbac_last_verified_at)
-           VALUES ($1, $2, $3, $4, 'granted', now())
+          `INSERT INTO subscriptions_registry (tenant_id, subscription_id, resource_groups, rbac_role_definition_id, rbac_grant_status, rbac_last_verified_at, subscription_display_name)
+           VALUES ($1, $2, $3, $4, 'granted', now(), $5)
            ON CONFLICT (tenant_id, subscription_id)
-           DO UPDATE SET resource_groups = $3, rbac_role_definition_id = $4, rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now()`,
-          [tenantId, subscriptionId, resourceGroups, roleDefinitionId]
+           DO UPDATE SET resource_groups = $3, rbac_role_definition_id = $4, rbac_grant_status = 'granted', rbac_last_verified_at = now(), updated_at = now(),
+                          subscription_display_name = COALESCE($5, subscriptions_registry.subscription_display_name)`,
+          [tenantId, subscriptionId, resourceGroups, roleDefinitionId, subscriptionDisplayName]
         );
       }
 
@@ -260,7 +293,7 @@ export class OnboardingService {
   async listRegistryRows(tenantId: string) {
     return withTenant(tenantId, async (client) => {
       const { rows } = await client.query(
-        `SELECT id, tenant_id, subscription_id, resource_groups, rbac_role_definition_id,
+        `SELECT id, tenant_id, subscription_id, subscription_display_name, resource_groups, rbac_role_definition_id,
                 rbac_grant_status, rbac_last_verified_at, rbac_drift_details,
                 graph_consent_status, graph_consent_service_principal_id, graph_consent_granted_at,
                 created_at, updated_at
