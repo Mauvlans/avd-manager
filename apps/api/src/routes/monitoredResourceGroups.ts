@@ -133,7 +133,22 @@ monitoredResourceGroupsRouter.post("/sync", async (req, res) => {
               `SELECT id FROM host_pools WHERE tenant_id = $1 AND subscription_id = $2 AND resource_group = $3 AND name = $4`,
               [tenantId, row.subscription_id, resourceGroup, pool.name]
             );
-            if (existing.length > 0) return; // already known — no update needed for a v1 discovery pass
+            if (existing.length > 0) {
+              // Already known — still refresh the cached fields + bump
+              // updated_at so the Host Pools page can show a real "last
+              // synced" timestamp instead of the row's original import
+              // time. Found live: the original v1 sync only ever
+              // inserted brand-new pools and silently no-op'd on
+              // already-known ones, so updated_at never reflected re-syncs
+              // Adam ran later — a real staleness bug in the cache, not
+              // just a cosmetic one.
+              await client.query(
+                `UPDATE host_pools SET location = $2, host_pool_type = $3, load_balancer_type = $4, max_session_limit = $5, updated_at = now()
+                 WHERE id = $1`,
+                [existing[0].id, pool.location, pool.hostPoolType, pool.loadBalancerType, pool.maxSessionLimit]
+              );
+              return;
+            }
             const inserted = await client.query(
               `INSERT INTO host_pools (tenant_id, subscription_id, resource_group, name, location, host_pool_type, load_balancer_type, max_session_limit)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,

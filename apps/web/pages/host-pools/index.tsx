@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { deleteHostPool, listHostPools, getOnboardingRegistry, listApplicationGroups, HostPoolRow } from "../../lib/api";
+import { deleteHostPool, listHostPools, getOnboardingRegistry, listApplicationGroups, syncMonitoredResourceGroups, HostPoolRow } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
 import HostPoolsLayout from "../../components/HostPoolsLayout";
 
@@ -38,6 +38,8 @@ export default function HostPools() {
   const [appGroupCounts, setAppGroupCounts] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   async function refresh() {
     if (!tenantId) return;
@@ -102,6 +104,35 @@ export default function HostPools() {
     }
   }
 
+  async function handleSync() {
+    if (!tenantId) return;
+    setSyncing(true);
+    setError("");
+    setSyncResult(null);
+    try {
+      const result = await syncMonitoredResourceGroups(tenantId);
+      setSyncResult(
+        `Synced: ${result.discovered} discovered, ${result.imported} newly imported${
+          result.errors.length > 0 ? `, ${result.errors.length} error(s)` : ""
+        }.`
+      );
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // "Last synced" = the most recent updated_at across all cached pools —
+  // real signal now that the sync route bumps updated_at on already-known
+  // pools too (fixed live: it used to only insert brand-new pools and
+  // silently skip refreshing known ones, so this timestamp would have
+  // been stuck at each pool's original import time otherwise).
+  const lastSyncedAt = pools.length > 0
+    ? pools.reduce((latest, p) => (p.updated_at > latest ? p.updated_at : latest), pools[0].updated_at)
+    : null;
+
   if (!tenantId) {
     return (
       <HostPoolsLayout>
@@ -114,9 +145,20 @@ export default function HostPools() {
     <HostPoolsLayout>
       {error && <p className="err">{error}</p>}
 
-      <a href="/deploy">
-        <button>+ Create</button>
-      </a>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <a href="/deploy">
+          <button>+ Create</button>
+        </a>
+        <button className="secondary" onClick={handleSync} disabled={syncing}>
+          {syncing ? "Syncing…" : "Refresh from Azure"}
+        </button>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>
+          {lastSyncedAt
+            ? `This table is cached from our database, not a live call on every page load — last synced ${new Date(lastSyncedAt).toLocaleString()}.`
+            : "This table is cached from our database, not a live call on every page load."}
+        </span>
+      </div>
+      {syncResult && <p style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{syncResult}</p>}
 
       {loading ? (
         <p>Loading…</p>
