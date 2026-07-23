@@ -24,6 +24,16 @@ export interface PlatformConfig {
   clientSecret: string | null;
   graphConsentRedirectUri: string;
   deployToAzureRbacTemplateUrl: string;
+  /** Public HTTPS base URL this API instance is reachable at — reused by
+   * Settings > Deploy > Bicep's custom-template upload flow to build a
+   * Deploy-to-Azure link Azure's portal can actually fetch the compiled
+   * template from (the portal needs a real public HTTPS URL, same
+   * constraint that drove the Cloudflare tunnel setup for the Graph
+   * consent redirect URI earlier in this project). Defaults to whatever
+   * tunnel URL was already wired up for GRAPH_CONSENT_REDIRECT_URI, since
+   * in this sandbox that's the one public HTTPS endpoint already pointed
+   * at this API. */
+  publicApiBaseUrl: string;
 }
 
 let current: PlatformConfig = {
@@ -35,6 +45,11 @@ let current: PlatformConfig = {
   deployToAzureRbacTemplateUrl:
     process.env.DEPLOY_TO_AZURE_RBAC_TEMPLATE_URL ||
     "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FMauvlans%2Favd-manager%2Fmain%2Finfra%2Fbicep%2Frbac-delegation.json",
+  publicApiBaseUrl:
+    process.env.PUBLIC_API_BASE_URL ||
+    (process.env.GRAPH_CONSENT_REDIRECT_URI
+      ? process.env.GRAPH_CONSENT_REDIRECT_URI.replace(/\/api\/onboarding\/graph-consent\/callback$/, "")
+      : `http://10.0.0.27:${process.env.PORT ?? 4000}`),
 };
 
 export function getPlatformConfig(): PlatformConfig {

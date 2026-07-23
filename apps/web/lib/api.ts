@@ -309,6 +309,27 @@ export interface ServiceVariableRow {
   selectedValues: string[];
 }
 
+export function uploadCustomTemplate(tenantId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+  return fetch(`${base}/api/custom-templates/upload`, {
+    method: "POST",
+    headers: { "x-tenant-id": tenantId },
+    body: form,
+  }).then(async (res) => {
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `upload failed: ${res.status}`);
+    return body as {
+      id: string;
+      fileName: string;
+      parameters: { name: string; type: string; description?: string; defaultValue?: unknown; allowedValues?: unknown[]; required: boolean }[];
+      rawUrl: string;
+      deployUrl: string;
+    };
+  });
+}
+
 export function listServiceVariables(tenantId: string) {
   return request<ServiceVariableRow[]>("/api/service-variables", { tenantId });
 }

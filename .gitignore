@@ -1,6 +1,9 @@
 node_modules/
 *.log
 platform-app-registrations.log
+tools/bicep
+tools/*.exe
+custom-templates/
 dist/
 build/
 .next/
