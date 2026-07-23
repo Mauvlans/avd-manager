@@ -358,6 +358,13 @@ export default function Onboarding() {
             a least-privilege custom RBAC role scoped to AVD host-pool/session-host management and
             assigns it to our app&apos;s service principal — a separate grant from Graph consent above.
           </p>
+          <p className="warn">
+            Already granted this before? Re-running this step against the SAME subscription updates
+            your existing role in place (deterministic role id per subscription) rather than creating
+            a duplicate — safe to re-run any time the role&apos;s required permissions change (e.g. when
+            a new AVD Manager feature needs a new read-only action, like Cost Optimization&apos;s
+            Microsoft.CostManagement/query/action).
+          </p>
           <label>Subscription ID (optional hint)</label>
           <input
             value={subscriptionId}
