@@ -441,6 +441,44 @@ export interface ServiceVariableRow {
   selectedValues: string[];
 }
 
+// --- Monitored Resource Groups (apps/api/src/routes/monitoredResourceGroups.ts) ---
+
+export interface ResourceGroupSummary {
+  name: string;
+  location: string;
+}
+
+export interface MonitoredResourceGroupRow {
+  subscription_id: string;
+  selected_resource_groups: string[];
+  last_synced_at: string | null;
+}
+
+export function listAzureResourceGroups(tenantId: string, subscriptionId: string) {
+  return request<ResourceGroupSummary[]>("/api/monitored-resource-groups/resource-groups", {
+    tenantId,
+    query: { subscriptionId },
+  });
+}
+
+export function getMonitoredResourceGroups(tenantId: string) {
+  return request<MonitoredResourceGroupRow[]>("/api/monitored-resource-groups/monitored", { tenantId });
+}
+
+export function updateMonitoredResourceGroups(tenantId: string, subscriptionId: string, selectedResourceGroups: string[]) {
+  return request<{ subscriptionId: string; selectedResourceGroups: string[] }>(
+    `/api/monitored-resource-groups/monitored/${encodeURIComponent(subscriptionId)}`,
+    { tenantId, method: "PUT", body: { selectedResourceGroups } }
+  );
+}
+
+export function syncMonitoredResourceGroups(tenantId: string) {
+  return request<{ discovered: number; imported: number; errors: string[] }>("/api/monitored-resource-groups/sync", {
+    tenantId,
+    method: "POST",
+  });
+}
+
 export function uploadCustomTemplate(tenantId: string, file: File) {
   const form = new FormData();
   form.append("file", file);

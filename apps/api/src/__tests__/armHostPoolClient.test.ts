@@ -7,6 +7,42 @@ class MockTokenProvider implements TokenProvider {
 }
 
 describe("ArmHostPoolClient (mocked ARM HTTP)", () => {
+  it("listHostPoolsInSubscription lists across resource groups and correctly extracts resourceGroup from each object's id (discovery/import flow for host pools created outside AVD Manager)", async () => {
+    const mockFetch: FetchLike = jest.fn(async (url: string) => {
+      expect(url).toContain("/subscriptions/sub1/providers/Microsoft.DesktopVirtualization/hostPools");
+      expect(url).not.toContain("resourceGroups");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: "/subscriptions/sub1/resourceGroups/rg-avd-prod/providers/Microsoft.DesktopVirtualization/hostPools/pool-a",
+              name: "pool-a",
+              location: "eastus",
+              properties: { hostPoolType: "Pooled", loadBalancerType: "BreadthFirst", maxSessionLimit: 10 },
+            },
+            {
+              id: "/subscriptions/sub1/resourceGroups/rg-avd-dev/providers/Microsoft.DesktopVirtualization/hostPools/pool-b",
+              name: "pool-b",
+              location: "westus2",
+              properties: { hostPoolType: "Personal", loadBalancerType: "Persistent", maxSessionLimit: 1 },
+            },
+          ],
+        }),
+      };
+    }) as unknown as FetchLike;
+
+    const client = new ArmHostPoolClient("tenant-guid", new MockTokenProvider(), mockFetch);
+    const pools = await client.listHostPoolsInSubscription("sub1");
+
+    expect(pools).toHaveLength(2);
+    expect(pools[0].name).toBe("pool-a");
+    expect(pools[0].resourceGroup).toBe("rg-avd-prod");
+    expect(pools[1].name).toBe("pool-b");
+    expect(pools[1].resourceGroup).toBe("rg-avd-dev");
+  });
+
   it("shapes the createOrUpdateHostPool request correctly (PUT, body, api-version)", async () => {
     const mockFetch: FetchLike = jest.fn(async (url: string, init?: any) => ({
       ok: true,

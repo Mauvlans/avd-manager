@@ -16,6 +16,7 @@ const SETTINGS_TABS = [
   { href: "/settings", label: "General" },
   { href: "/onboarding", label: "Onboarding" },
   { href: "/settings/service-variables", label: "Service Variables" },
+  { href: "/settings/monitored-resource-groups", label: "Monitored Resource Groups" },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {

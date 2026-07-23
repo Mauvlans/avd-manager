@@ -25,6 +25,15 @@ export interface TokenProvider {
  */
 export interface IArmHostPoolClient {
   listHostPools(subscriptionId: string, resourceGroup: string): Promise<HostPool[]>;
+  /** Lists ALL host pools in a subscription, across every resource group —
+   * used for discovery/import of host pools that exist in Azure but were
+   * never created through this product (e.g. Adam's real pre-existing
+   * host pool, found live in his subscription with no matching DB row).
+   * Uses ARM's subscription-scoped list endpoint
+   * (Microsoft.DesktopVirtualization/hostPools under the subscription,
+   * not a specific resourceGroup) rather than requiring the caller to
+   * already know which resource group to look in. */
+  listHostPoolsInSubscription(subscriptionId: string): Promise<HostPool[]>;
   getHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<HostPool | null>;
   createOrUpdateHostPool(
     subscriptionId: string,
@@ -150,6 +159,16 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
     return name ? `${base}/${name}?api-version=${ARM_API_VERSION}` : `${base}?api-version=${ARM_API_VERSION}`;
   }
 
+  /** Subscription-scoped host pool list URL — no resourceGroup segment,
+   * per ARM's own Microsoft.DesktopVirtualization/hostPools "list by
+   * subscription" operation. Each returned object's `id` still contains
+   * its actual resource group, extracted in listHostPoolsInSubscription
+   * below since HostPool.resourceGroup is a real field callers rely on
+   * (e.g. Host Pools page's table). */
+  private hostPoolsInSubscriptionUrl(subscriptionId: string): string {
+    return `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.DesktopVirtualization/hostPools?api-version=${ARM_API_VERSION}`;
+  }
+
   private sessionHostUrl(
     subscriptionId: string,
     resourceGroup: string,
@@ -210,6 +229,24 @@ export class ArmHostPoolClient implements IArmHostPoolClient {
   async listHostPools(subscriptionId: string, resourceGroup: string): Promise<HostPool[]> {
     const data = await this.request(this.hostPoolUrl(subscriptionId, resourceGroup), "GET");
     return (data.value ?? []).map((v: any) => this.mapArmHostPool(subscriptionId, resourceGroup, v));
+  }
+
+  /** Extracts the resource group segment from a full ARM resourceId
+   * (e.g. "/subscriptions/x/resourceGroups/rg-avd-prod/providers/...").
+   * Needed because the subscription-scoped list endpoint doesn't accept
+   * (and its response objects don't separately echo) a resourceGroup —
+   * it's embedded in each object's `id` only. */
+  private resourceGroupFromResourceId(resourceId: string): string {
+    const parts = resourceId.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p.toLowerCase() === "resourcegroups");
+    return idx !== -1 && parts[idx + 1] ? parts[idx + 1] : "";
+  }
+
+  async listHostPoolsInSubscription(subscriptionId: string): Promise<HostPool[]> {
+    const data = await this.request(this.hostPoolsInSubscriptionUrl(subscriptionId), "GET");
+    return (data.value ?? []).map((v: any) =>
+      this.mapArmHostPool(subscriptionId, this.resourceGroupFromResourceId(v.id), v)
+    );
   }
 
   async getHostPool(subscriptionId: string, resourceGroup: string, name: string): Promise<HostPool | null> {
