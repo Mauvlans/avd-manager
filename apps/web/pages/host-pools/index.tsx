@@ -1,24 +1,22 @@
 import { useEffect, useState } from "react";
-import { createHostPool, deleteHostPool, listHostPools, HostPoolRow } from "../../lib/api";
+import { deleteHostPool, listHostPools, HostPoolRow } from "../../lib/api";
 import { useTenantId } from "../../lib/useTenantId";
 
+/**
+ * Host Pools — list/manage existing host pools. Creation now happens
+ * exclusively via Deploy > Template (or Deploy > Bicep for a custom
+ * template) — this page's old inline "+ New host pool" form (plain
+ * free-text Subscription ID / Location inputs, no dropdowns) was retired
+ * per Adam's direction, since Deploy already covers creation with the
+ * better UX (subscription dropdown sourced from the registry, region
+ * dropdown sourced from Settings > Service Variables, right-side slide-out
+ * panel) and keeping both around risked the two flows drifting apart.
+ */
 export default function HostPools() {
   const [tenantId] = useTenantId();
   const [pools, setPools] = useState<HostPoolRow[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-
-  const [form, setForm] = useState({
-    subscriptionId: "",
-    resourceGroup: "",
-    name: "",
-    location: "eastus",
-    hostPoolType: "Pooled",
-    loadBalancerType: "BreadthFirst",
-    maxSessionLimit: 10,
-  });
-  const [warning, setWarning] = useState("");
 
   async function refresh() {
     if (!tenantId) return;
@@ -37,19 +35,6 @@ export default function HostPools() {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId]);
-
-  async function handleCreate() {
-    setError("");
-    setWarning("");
-    try {
-      const created = await createHostPool(tenantId, form as any);
-      if (created.warning) setWarning(created.warning);
-      setShowForm(false);
-      refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
 
   async function handleDelete(id: string) {
     setError("");
@@ -75,45 +60,17 @@ export default function HostPools() {
       <h1>Host Pools</h1>
       <p>Tenant: <span className="mono">{tenantId}</span></p>
       {error && <p className="err">{error}</p>}
-      {warning && <p className="warn">{warning}</p>}
 
-      <button onClick={() => setShowForm((s) => !s)}>{showForm ? "Cancel" : "+ New host pool"}</button>
-
-      {showForm && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <label>Subscription ID</label>
-          <input value={form.subscriptionId} onChange={(e) => setForm({ ...form, subscriptionId: e.target.value })} />
-          <label>Resource group</label>
-          <input value={form.resourceGroup} onChange={(e) => setForm({ ...form, resourceGroup: e.target.value })} />
-          <label>Name</label>
-          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <label>Location</label>
-          <input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} />
-          <label>Host pool type</label>
-          <select value={form.hostPoolType} onChange={(e) => setForm({ ...form, hostPoolType: e.target.value })}>
-            <option value="Pooled">Pooled</option>
-            <option value="Personal">Personal</option>
-          </select>
-          <label>Load balancer type</label>
-          <select value={form.loadBalancerType} onChange={(e) => setForm({ ...form, loadBalancerType: e.target.value })}>
-            <option value="BreadthFirst">BreadthFirst</option>
-            <option value="DepthFirst">DepthFirst</option>
-            <option value="Persistent">Persistent</option>
-          </select>
-          <label>Max session limit</label>
-          <input
-            type="number"
-            value={form.maxSessionLimit}
-            onChange={(e) => setForm({ ...form, maxSessionLimit: Number(e.target.value) })}
-          />
-          <button onClick={handleCreate}>Create</button>
-        </div>
-      )}
+      <a href="/deploy">
+        <button>+ New Host Pool (via Deploy)</button>
+      </a>
 
       {loading ? (
         <p>Loading…</p>
       ) : pools.length === 0 ? (
-        <p>No host pools yet.</p>
+        <p>
+          No host pools yet. Head to <a href="/deploy">Deploy</a> to create one from a template.
+        </p>
       ) : (
         <table style={{ marginTop: 16 }}>
           <thead>
