@@ -4,48 +4,60 @@ import {
   listResources,
   getResourceSummary,
   listCollectionRuns,
+  triggerTelemetryCollection,
+  triggerCostIngestion,
+  getCostSummary,
+  getCostByService,
+  evaluateRecommendations,
+  listRecommendations,
+  dismissRecommendation,
   ResourceRow,
   ResourceTypeSummary,
   CollectionRunRow,
+  CostSummaryRow,
+  CostByServiceRow,
+  RecommendationRow,
 } from "../lib/api";
 import { useTenantId } from "../lib/useTenantId";
 
 /**
- * Cost Optimization — Phase 1 (per Adam's plan, message.txt): resource
- * inventory, the foundation everything else in the plan builds on
- * ("Discover AVD and supporting Azure resources" is step 1 of the
- * product objective). Real Azure Resource Graph collection (§ 4.1), real
- * Postgres upserts, real RLS — not simulated data. Later phases (cost
- * import, telemetry, recommendation engine) build on this table.
+ * Cost Optimization — per Adam's plan (message.txt). Real Azure data
+ * throughout: Resource Graph inventory (Phase 1), Cost Management +
+ * Azure Monitor telemetry (Phase 2/3), and a real recommendation engine
+ * evaluated against that collected data (Phase 4). Read-only.
  */
 export default function CostOptimization() {
   const [tenantId] = useTenantId();
   const [resources, setResources] = useState<ResourceRow[]>([]);
   const [summary, setSummary] = useState<ResourceTypeSummary[]>([]);
   const [runs, setRuns] = useState<CollectionRunRow[]>([]);
+  const [costSummary, setCostSummary] = useState<CostSummaryRow[]>([]);
+  const [costByService, setCostByService] = useState<CostByServiceRow[]>([]);
+  const [recommendations, setRecommendations] = useState<RecommendationRow[]>([]);
   const [typeFilter, setTypeFilter] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [collecting, setCollecting] = useState(false);
-  const [collectResult, setCollectResult] = useState<{ discovered: number; inserted: number; updated: number; softDeleted: number } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<string | null>(null);
 
   async function refresh() {
     if (!tenantId) return;
-    setLoading(true);
-    setError("");
     try {
-      const [resourceRows, summaryRows, runRows] = await Promise.all([
+      const [resourceRows, summaryRows, runRows, costRows, costServiceRows, recRows] = await Promise.all([
         listResources(tenantId, typeFilter ? { resourceType: typeFilter } : undefined),
         getResourceSummary(tenantId),
         listCollectionRuns(tenantId),
+        getCostSummary(tenantId).catch(() => []),
+        getCostByService(tenantId).catch(() => []),
+        listRecommendations(tenantId).catch(() => []),
       ]);
       setResources(resourceRows);
       setSummary(summaryRows);
       setRuns(runRows);
+      setCostSummary(costRows);
+      setCostByService(costServiceRows);
+      setRecommendations(recRows);
     } catch (err) {
       setError((err as Error).message);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -54,20 +66,26 @@ export default function CostOptimization() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId, typeFilter]);
 
-  async function handleCollect() {
+  async function run(action: string, fn: () => Promise<unknown>) {
     if (!tenantId) return;
-    setCollecting(true);
+    setBusy(action);
     setError("");
-    setCollectResult(null);
+    setLastResult(null);
     try {
-      const result = await triggerResourceCollection(tenantId);
-      setCollectResult(result);
-      refresh();
+      const result = await fn();
+      setLastResult(JSON.stringify(result));
+      await refresh();
     } catch (err) {
-      setError((err as Error).message);
+      setError(`${action}: ${(err as Error).message}`);
     } finally {
-      setCollecting(false);
+      setBusy(null);
     }
+  }
+
+  async function handleDismiss(id: string) {
+    if (!tenantId) return;
+    await dismissRecommendation(tenantId, id);
+    refresh();
   }
 
   if (!tenantId) {
@@ -83,25 +101,113 @@ export default function CostOptimization() {
     <div>
       <h1>Cost Optimization</h1>
       <p className="warn">
-        Phase 1 foundation: resource inventory via real Azure Resource Graph queries across every
-        RBAC-granted subscription. This is the discovery layer the cost/telemetry/recommendation
-        phases build on — read-only, no changes made to your environment.
+        Real Azure data throughout — resource inventory (Resource Graph), cost (Cost Management),
+        telemetry (Azure Monitor + AVD session state), and recommendations evaluated against that
+        real data. Read-only: nothing here changes your Azure environment.
       </p>
       {error && <p className="err">{error}</p>}
+      {lastResult && <p style={{ fontSize: 12, opacity: 0.7 }}>{lastResult}</p>}
 
       <div className="card">
-        <h2 style={{ marginTop: 0 }}>Run Inventory Collection</h2>
-        <p>Queries Azure Resource Graph across every subscription this tenant has an active RBAC grant for.</p>
-        <button onClick={handleCollect} disabled={collecting}>
-          {collecting ? "Collecting…" : "Run Collection Now"}
-        </button>
-        {collectResult && (
-          <p style={{ marginTop: 8 }}>
-            Discovered {collectResult.discovered} resource(s) — {collectResult.inserted} new,{" "}
-            {collectResult.updated} updated, {collectResult.softDeleted} no longer present.
-          </p>
-        )}
+        <h2 style={{ marginTop: 0 }}>Collection</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => run("resources", () => triggerResourceCollection(tenantId))} disabled={busy !== null}>
+            {busy === "resources" ? "Collecting…" : "Run Resource Inventory"}
+          </button>
+          <button onClick={() => run("telemetry", () => triggerTelemetryCollection(tenantId))} disabled={busy !== null}>
+            {busy === "telemetry" ? "Collecting…" : "Run Telemetry Collection"}
+          </button>
+          <button onClick={() => run("cost", () => triggerCostIngestion(tenantId))} disabled={busy !== null}>
+            {busy === "cost" ? "Ingesting…" : "Run Cost Ingestion"}
+          </button>
+          <button onClick={() => run("recommendations", () => evaluateRecommendations(tenantId))} disabled={busy !== null}>
+            {busy === "recommendations" ? "Evaluating…" : "Evaluate Recommendations"}
+          </button>
+        </div>
       </div>
+
+      {recommendations.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 style={{ marginTop: 0 }}>Recommendations ({recommendations.length} open)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Category</th>
+                <th>Severity</th>
+                <th>Est. Monthly Savings</th>
+                <th>Confidence</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {recommendations.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{r.title}</div>
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>{r.summary}</div>
+                  </td>
+                  <td>{r.category}</td>
+                  <td>{r.severity}</td>
+                  <td>
+                    {r.estimated_monthly_savings !== null
+                      ? `${r.currency ?? ""} ${Number(r.estimated_monthly_savings).toFixed(2)}`
+                      : "not yet quantified"}
+                  </td>
+                  <td>{Number(r.confidence_score).toFixed(0)}%</td>
+                  <td>
+                    <button onClick={() => handleDismiss(r.id)}>Dismiss</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {costSummary.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 style={{ marginTop: 0 }}>Cost by Month (Amortized)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Total Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {costSummary.map((c) => (
+                <tr key={c.month}>
+                  <td>{c.month}</td>
+                  <td>{c.currency} {Number(c.total_cost).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {costByService.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 style={{ marginTop: 0 }}>Cost by Service</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Service</th>
+                <th>Total Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {costByService.map((c, i) => (
+                <tr key={i}>
+                  <td>{c.service_family ?? "(uncategorized)"}</td>
+                  <td>{c.currency} {Number(c.total_cost).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {summary.length > 0 && (
         <div className="overview-grid" style={{ marginTop: 16 }}>
@@ -115,7 +221,7 @@ export default function CostOptimization() {
       )}
 
       <div className="card" style={{ marginTop: 16 }}>
-        <label>Filter by resource type</label>
+        <label>Filter resources by type</label>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">All types</option>
           {summary.map((s) => (
@@ -126,10 +232,8 @@ export default function CostOptimization() {
         </select>
       </div>
 
-      {loading ? (
-        <p>Loading…</p>
-      ) : resources.length === 0 ? (
-        <p>No resources discovered yet. Run a collection above.</p>
+      {resources.length === 0 ? (
+        <p>No resources discovered yet. Run collection above.</p>
       ) : (
         <table style={{ marginTop: 16 }}>
           <thead>
@@ -162,6 +266,7 @@ export default function CostOptimization() {
             <thead>
               <tr>
                 <th>Started</th>
+                <th>Type</th>
                 <th>Status</th>
                 <th>Records</th>
               </tr>
@@ -170,6 +275,7 @@ export default function CostOptimization() {
               {runs.map((r) => (
                 <tr key={r.id}>
                   <td>{new Date(r.started_at).toLocaleString()}</td>
+                  <td>{r.collector_type}</td>
                   <td>{r.status}</td>
                   <td>{r.record_count ?? "—"}</td>
                 </tr>

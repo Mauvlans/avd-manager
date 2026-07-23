@@ -532,6 +532,73 @@ export function listCollectionRuns(tenantId: string) {
   return request<CollectionRunRow[]>("/api/resources/collection-runs", { tenantId });
 }
 
+// --- Cost Optimization: cost facts (apps/api/src/routes/costFacts.ts) ---
+
+export interface CostSummaryRow {
+  month: string;
+  currency: string;
+  total_cost: string;
+}
+
+export interface CostByServiceRow {
+  service_family: string | null;
+  currency: string;
+  total_cost: string;
+}
+
+export function triggerCostIngestion(tenantId: string) {
+  return request<{ collectionRunId: string; rowsIngested: number }>("/api/cost-facts/ingest", { tenantId, method: "POST", body: {} });
+}
+
+export function getCostSummary(tenantId: string) {
+  return request<CostSummaryRow[]>("/api/cost-facts/summary", { tenantId });
+}
+
+export function getCostByService(tenantId: string) {
+  return request<CostByServiceRow[]>("/api/cost-facts/by-service", { tenantId });
+}
+
+// --- Cost Optimization: telemetry (apps/api/src/routes/telemetry.ts) ---
+
+export function triggerTelemetryCollection(tenantId: string) {
+  return request<{ collectionRunId: string; vmsCollected: number; hostPoolsCollected: number; metricPointsIngested: number; errors: string[] }>(
+    "/api/telemetry/collect",
+    { tenantId, method: "POST", body: {} }
+  );
+}
+
+// --- Cost Optimization: recommendations (apps/api/src/routes/recommendations.ts) ---
+
+export interface RecommendationRow {
+  id: string;
+  rule_id: string;
+  azure_resource_id: string | null;
+  title: string;
+  summary: string;
+  category: string;
+  severity: string;
+  risk: string;
+  estimated_monthly_savings: string | null;
+  currency: string | null;
+  confidence_score: string;
+  evidence: Record<string, unknown>;
+  status: string;
+  first_detected_at: string;
+  last_detected_at: string;
+}
+
+export function evaluateRecommendations(tenantId: string) {
+  return request<{ ruleResults: { ruleId: string; candidatesFound: number }[] }>("/api/recommendations/evaluate", { tenantId, method: "POST", body: {} });
+}
+
+export function listRecommendations(tenantId: string, status: string = "open") {
+  return request<RecommendationRow[]>("/api/recommendations", { tenantId, query: { status } });
+}
+
+export function dismissRecommendation(tenantId: string, id: string) {
+  return request<void>(`/api/recommendations/${id}/dismiss`, { tenantId, method: "POST" });
+}
+
 export function uploadCustomTemplate(tenantId: string, file: File) {
   const form = new FormData();
   form.append("file", file);
