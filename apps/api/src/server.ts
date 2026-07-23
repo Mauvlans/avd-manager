@@ -14,6 +14,7 @@ import { customTemplatesRouter } from "./routes/customTemplates";
 import { monitoredResourceGroupsRouter } from "./routes/monitoredResourceGroups";
 import { resourcesRouter } from "./routes/resources";
 import { costFactsRouter } from "./routes/costFacts";
+import { telemetryRouter } from "./routes/telemetry";
 
 const app = express();
 app.use(cors());
@@ -51,6 +52,7 @@ app.use("/api/custom-templates", customTemplatesRouter);
 app.use("/api/monitored-resource-groups", monitoredResourceGroupsRouter);
 app.use("/api/resources", resourcesRouter);
 app.use("/api/cost-facts", costFactsRouter);
+app.use("/api/telemetry", telemetryRouter);
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
