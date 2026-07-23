@@ -15,6 +15,7 @@ import { monitoredResourceGroupsRouter } from "./routes/monitoredResourceGroups"
 import { resourcesRouter } from "./routes/resources";
 import { costFactsRouter } from "./routes/costFacts";
 import { telemetryRouter } from "./routes/telemetry";
+import { recommendationsRouter } from "./routes/recommendations";
 
 const app = express();
 app.use(cors());
@@ -53,6 +54,7 @@ app.use("/api/monitored-resource-groups", monitoredResourceGroupsRouter);
 app.use("/api/resources", resourcesRouter);
 app.use("/api/cost-facts", costFactsRouter);
 app.use("/api/telemetry", telemetryRouter);
+app.use("/api/recommendations", recommendationsRouter);
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
